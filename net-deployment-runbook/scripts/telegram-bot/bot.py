@@ -344,6 +344,12 @@ def gateway_completion(db: sqlite3.Connection, conversation_id: str, input_text:
         "messages": messages,
         "max_tokens": max_output_tokens,
         "temperature": 0.2,
+        # The pinned Qwen3 gateway supports this documented vLLM control. A
+        # short consumer/probe completion otherwise can spend its tiny output
+        # budget on a <think> block and leave no deliverable user content.
+        # Keeping the control in the request is explicit and auditable; the
+        # bot still rejects an empty visible response if a gateway ignores it.
+        "chat_template_kwargs": {"enable_thinking": False},
     }).encode()
     request = Request(
         f"{GATEWAY_API_BASE_URL}/chat/completions",

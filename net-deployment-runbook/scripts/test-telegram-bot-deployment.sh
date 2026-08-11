@@ -41,7 +41,9 @@ INTERNAL_API_TOKEN=fixture-internal-token \
 STATE_DB="$tmp/bot.sqlite3" \
 METRICS_FILE="$tmp/telegram-bot.prom" \
 python3 - "$ROOT/scripts/telegram-bot/bot.py" <<'PY'
+import io
 import importlib.util
+import json
 import sys
 
 spec = importlib.util.spec_from_file_location("telegram_bot_fixture", sys.argv[1])
@@ -53,6 +55,29 @@ with bot.connection() as db:
 assert health["inference_ready"] is False
 assert health["last_inference_outcome"] == "http_429"
 assert health["inference_failure_reason"] == "http_429"
+
+captured = {}
+class Response(io.BytesIO):
+    status = 200
+    def __enter__(self):
+        return self
+    def __exit__(self, *_args):
+        self.close()
+
+def fake_urlopen(request, timeout):
+    captured["request"] = json.loads(request.data)
+    return Response(json.dumps({
+        "choices": [{"message": {"content": "GDC_OK"}}],
+        "usage": {"prompt_tokens": 2, "completion_tokens": 2, "total_tokens": 4},
+    }).encode())
+
+bot.urlopen = fake_urlopen
+with bot.connection() as db:
+    conversation = bot.create_conversation(db)
+    result = bot.gateway_completion(db, conversation, "Reply exactly GDC_OK", 8)
+assert captured["request"]["chat_template_kwargs"] == {"enable_thinking": False}
+assert result["status"] == "completed"
+assert result["output_text"] == "GDC_OK"
 PY
 
 grep -Fq '@telegram_consumer path /status/telegram-consumer' "$ROOT/04-ops/edge-node/PublicCaddyfile"
