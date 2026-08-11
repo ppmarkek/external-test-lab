@@ -242,13 +242,15 @@ load_project() {
     ENV_FILE="$(<"$STATE/active-role-config")"
   fi
   [[ -s "$ENV_FILE" ]] || die 'no role input is available; GENESIS and JOIN create it automatically, while OPS requires .env'
-  local caller_genesis_node='' caller_public_edge_node='' caller_gateway_node='' caller_telegram_bot_host='' caller_guardian_enabled='' resolved_profile_key runtime_topology runtime_genesis_node runtime_guardian_enabled runtime_home
-  local caller_genesis_node_set=false caller_public_edge_node_set=false caller_gateway_node_set=false caller_telegram_bot_host_set=false caller_guardian_enabled_set=false
+  local caller_genesis_node='' caller_public_edge_node='' caller_gateway_node='' caller_telegram_bot_host='' caller_guardian_enabled='' caller_gateway_max_concurrent_requests='' caller_gateway_max_input_tokens_in_flight='' resolved_profile_key runtime_topology runtime_genesis_node runtime_guardian_enabled runtime_home
+  local caller_genesis_node_set=false caller_public_edge_node_set=false caller_gateway_node_set=false caller_telegram_bot_host_set=false caller_guardian_enabled_set=false caller_gateway_max_concurrent_requests_set=false caller_gateway_max_input_tokens_in_flight_set=false
   if [[ ${GDC_GENESIS_NODE+x} ]]; then caller_genesis_node="$GDC_GENESIS_NODE"; caller_genesis_node_set=true; fi
   if [[ ${GDC_PUBLIC_EDGE_NODE+x} ]]; then caller_public_edge_node="$GDC_PUBLIC_EDGE_NODE"; caller_public_edge_node_set=true; fi
   if [[ ${GDC_GATEWAY_NODE+x} ]]; then caller_gateway_node="$GDC_GATEWAY_NODE"; caller_gateway_node_set=true; fi
   if [[ ${GDC_TELEGRAM_BOT_HOST+x} ]]; then caller_telegram_bot_host="$GDC_TELEGRAM_BOT_HOST"; caller_telegram_bot_host_set=true; fi
   if [[ ${GDC_GENESIS_GUARDIAN_ENABLED+x} ]]; then caller_guardian_enabled="$GDC_GENESIS_GUARDIAN_ENABLED"; caller_guardian_enabled_set=true; fi
+  if [[ ${GDC_GATEWAY_MAX_CONCURRENT_REQUESTS+x} ]]; then caller_gateway_max_concurrent_requests="$GDC_GATEWAY_MAX_CONCURRENT_REQUESTS"; caller_gateway_max_concurrent_requests_set=true; fi
+  if [[ ${GDC_GATEWAY_MAX_INPUT_TOKENS_IN_FLIGHT+x} ]]; then caller_gateway_max_input_tokens_in_flight="$GDC_GATEWAY_MAX_INPUT_TOKENS_IN_FLIGHT"; caller_gateway_max_input_tokens_in_flight_set=true; fi
   runtime_home="$GDC_HOME"
   set -a
   # shellcheck disable=SC1090
@@ -281,6 +283,8 @@ load_project() {
   if [[ "$caller_gateway_node_set" == true ]]; then export GDC_GATEWAY_NODE="$caller_gateway_node"; fi
   if [[ "$caller_telegram_bot_host_set" == true ]]; then export GDC_TELEGRAM_BOT_HOST="$caller_telegram_bot_host"; fi
   if [[ "$caller_guardian_enabled_set" == true ]]; then export GDC_GENESIS_GUARDIAN_ENABLED="$caller_guardian_enabled"; fi
+  if [[ "$caller_gateway_max_concurrent_requests_set" == true ]]; then export GDC_GATEWAY_MAX_CONCURRENT_REQUESTS="$caller_gateway_max_concurrent_requests"; fi
+  if [[ "$caller_gateway_max_input_tokens_in_flight_set" == true ]]; then export GDC_GATEWAY_MAX_INPUT_TOKENS_IN_FLIGHT="$caller_gateway_max_input_tokens_in_flight"; fi
 
   # Keep a fresh Community DevNet recognisable across its reproducible
   # baseline and upgrade rehearsals. An explicit deployment override remains

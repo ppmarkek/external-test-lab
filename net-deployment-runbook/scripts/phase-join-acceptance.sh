@@ -33,7 +33,126 @@ poc_accepted_epoch=0
 poc_participant_weight=0
 poc_accepted_weight_sum=0
 poc_committed_total=0
+poc_distribution_tx_hash=''
+poc_distribution_tx_code=-1
 printf '[]' >"$RUN/poc-acceptance-observations.json"
+
+# Keep an evidence trail for the stage actually selected by the chain.  A
+# participant can be ACTIVE and have a runtime while its DAPI/MLNode follows
+# an old stage; accepting only the final epoch-group weight would conceal that
+# class of failure (LIFE-012).
+capture_poc_stage_trace() {
+  local group="$1" epoch="$2" stage commits distributions validations artifact_local artifact_public
+  stage="$(jq -er '.epoch_group_data.poc_start_block_height | tonumber' <<<"$group")" || return 1
+  [[ "$stage" =~ ^[1-9][0-9]*$ ]] || return 1
+
+  cp "$RUN/epoch-group.json" "$RUN/canonical-epoch-group-$stage.json"
+  curl -fsS --connect-timeout 5 --max-time 15 \
+    "$CHAIN_BASE/chain-api/productscience/inference/inference/all_poc_v2_store_commits/$stage" \
+    >"$RUN/poc-commits-$stage.json" || printf '{"commits":[]}' >"$RUN/poc-commits-$stage.json"
+  curl -fsS --connect-timeout 5 --max-time 15 \
+    "$CHAIN_BASE/chain-api/productscience/inference/inference/all_mlnode_weight_distributions/$stage" \
+    >"$RUN/poc-distributions-$stage.json" || printf '{"distributions":[]}' >"$RUN/poc-distributions-$stage.json"
+  curl -fsS --connect-timeout 5 --max-time 15 \
+    "$CHAIN_BASE/chain-api/productscience/inference/inference/poc_v2_validations_for_stage/$stage" \
+    >"$RUN/poc-validations-$stage.json" || printf '{"poc_validation":[]}' >"$RUN/poc-validations-$stage.json"
+
+  # The participant's public endpoint must expose the same artifact root that
+  # the validator will fetch.  This directly catches edge proxy cross-routing.
+  artifact_public="https://$(node_public_host "$NODE")/v1/poc/artifacts/state?height=$stage&model_id=${MODEL_ID//\//%2F}"
+  curl -fsS --connect-timeout 5 --max-time 15 "$artifact_public" \
+    >"$RUN/poc-artifact-public-$stage.json" || printf '{"unavailable":true}' >"$RUN/poc-artifact-public-$stage.json"
+  artifact_local="http://127.0.0.1:9000/v1/poc/artifacts/state?height=$stage&model_id=${MODEL_ID//\//%2F}"
+  ssh -T "$NODE" "curl -fsS --connect-timeout 5 --max-time 15 '$artifact_local'" \
+    >"$RUN/poc-artifact-local-$stage.json" 2>/dev/null || printf '{"unavailable":true}' >"$RUN/poc-artifact-local-$stage.json"
+
+  # node is the deployed DAPI/inferenced image. Retain only PoC lifecycle messages for
+  # this canonical numeric stage; logs are diagnostic evidence, never a PASS
+  # substitute.  The bounded tail avoids copying unrelated operator traffic.
+  ssh -T "$NODE" "set -o pipefail; cd /srv/dai/$NODE && docker compose logs --no-color --tail=800 node 2>&1 | grep -E '$stage|poc(StageStartBlockHeight|Height)|PoC|artifact|commit|distribution|validation' | tail -n 240" \
+    >"$RUN/dapi-stage-$stage.log" 2>&1 || true
+  ssh -T "$NODE" "set -o pipefail; cd /srv/dai/$NODE && docker compose logs --no-color --tail=800 mlnode 2>&1 | grep -E '$stage|poc(StageStartBlockHeight|Height)|PoC|artifact|commit|distribution|validation' | tail -n 240" \
+    >"$RUN/mlnode-stage-$stage.log" 2>&1 || true
+
+  commits="$RUN/poc-commits-$stage.json"
+  distributions="$RUN/poc-distributions-$stage.json"
+  validations="$RUN/poc-validations-$stage.json"
+  jq -n --argjson epoch "$epoch" --argjson canonical_poc_start_block_height "$stage" \
+    --arg participant "$ADDRESS" --arg runtime_id "$RUNTIME_ID" \
+    --slurpfile commits "$commits" --slurpfile distributions "$distributions" \
+    --slurpfile validations "$validations" --slurpfile artifact_local "$RUN/poc-artifact-local-$stage.json" \
+    --slurpfile artifact_public "$RUN/poc-artifact-public-$stage.json" '
+      def participant_commit:
+        $commits[0].commits[]? | select(.participant_address == $participant);
+      def participant_distribution:
+        $distributions[0].distributions[]? | select(.participant_address == $participant);
+      def participant_validations:
+        [$validations[0].poc_validation[]?.poc_validation[]?
+          | select(.participant_address == $participant)];
+      {epoch:$epoch,canonical_poc_start_block_height:$canonical_poc_start_block_height,
+       participant_address:$participant,runtime_id:$runtime_id,
+       commit:([participant_commit] | first // null),
+       distribution:([participant_distribution] | first // null),
+       validations:participant_validations,
+       artifact_local:$artifact_local[0],artifact_public:$artifact_public[0],
+       artifact_public_matches_local:(
+         ($artifact_local[0].root_hash? // null) != null and
+         ($artifact_local[0].root_hash? == $artifact_public[0].root_hash?) and
+         ($artifact_local[0].count? == $artifact_public[0].count?))}
+    ' >"$RUN/poc-stage-trace-$stage.json"
+  jq --slurpfile trace "$RUN/poc-stage-trace-$stage.json" \
+    'if any(.[]; .canonical_poc_start_block_height == $trace[0].canonical_poc_start_block_height)
+     then . else . + [$trace[0]] end' "$RUN/poc-stage-traces.json" \
+    >"$RUN/poc-stage-traces.tmp"
+  mv "$RUN/poc-stage-traces.tmp" "$RUN/poc-stage-traces.json"
+}
+printf '[]' >"$RUN/poc-stage-traces.json"
+
+capture_poc_distribution_transactions() {
+  local stage="$1" latest_height end_height height tx_b64 tx_hash tx_json
+  local max_blocks="${GDC_JOIN_TX_TRACE_BLOCKS:-180}"
+  [[ "$stage" =~ ^[1-9][0-9]*$ && "$max_blocks" =~ ^[1-9][0-9]*$ ]] || return 1
+  # A second capture of the same canonical stage would only duplicate public
+  # evidence and unnecessarily load the chain API.
+  [[ -s "$RUN/poc-distribution-transactions-$stage.json" ]] && return 0
+  latest_height="$(curl -fsS --connect-timeout 5 --max-time 15 "$CHAIN_BASE/chain-rpc/status" \
+    | jq -er '.result.sync_info.latest_block_height | tonumber')" || return 1
+  end_height=$((stage + max_blocks))
+  (( latest_height < end_height )) && end_height="$latest_height"
+  printf '[]' >"$RUN/poc-distribution-transactions-$stage.json"
+  for ((height = stage; height <= end_height; height++)); do
+    while IFS= read -r tx_b64; do
+      [[ -n "$tx_b64" ]] || continue
+      tx_hash="$(printf '%s' "$tx_b64" | base64 -d | sha256sum | awk '{print toupper($1)}')" || continue
+      tx_json="$(curl -fsS --connect-timeout 5 --max-time 15 \
+        "$CHAIN_BASE/chain-api/cosmos/tx/v1beta1/txs/$tx_hash")" || continue
+      jq -e --arg hash "$tx_hash" --argjson expected_height "$height" \
+        --arg participant "$ADDRESS" --arg runtime_id "$RUNTIME_ID" --arg model "$MODEL_ID" '
+          [.tx.body.messages[]? | .. | objects
+           | select(."@type"? == "/inference.inference.MsgMLNodeWeightDistribution")
+           | select(.creator == $participant)
+           | select(any(.entries[]?; .model_id == $model
+             and any(.weights[]?; .node_id == $runtime_id and (.weight | tonumber) > 0)))] as $messages
+          | select($messages | length > 0)
+          | {tx_hash:$hash,tx_code:(.tx_response.code | tonumber),
+             tx_height:(.tx_response.height | tonumber),scanned_height:$expected_height,
+             message_type:"/inference.inference.MsgMLNodeWeightDistribution",
+             messages:$messages}
+        ' <<<"$tx_json" >"$RUN/poc-distribution-transaction-$stage-$tx_hash.json" 2>/dev/null || continue
+      jq --slurpfile transaction "$RUN/poc-distribution-transaction-$stage-$tx_hash.json" \
+        '. + $transaction' "$RUN/poc-distribution-transactions-$stage.json" \
+        >"$RUN/poc-distribution-transactions.tmp"
+      mv "$RUN/poc-distribution-transactions.tmp" "$RUN/poc-distribution-transactions-$stage.json"
+    done < <(curl -fsS --connect-timeout 5 --max-time 15 \
+      "$CHAIN_BASE/chain-rpc/block?height=$height" \
+      | jq -r '.result.block.data.txs[]?')
+  done
+  jq -e --argjson stage "$stage" --arg participant "$ADDRESS" '
+    length > 0
+    and all(.[]; .tx_code == 0 and .tx_height >= $stage and .scanned_height == .tx_height)
+    and all(.[]; .messages[]?.creator == $participant)
+  ' "$RUN/poc-distribution-transactions-$stage.json" >/dev/null || return 1
+}
 
 # A transport or parsing failure must still leave an honest, sanitized
 # evidence verdict.  Expected negative outcomes below write their own more
@@ -84,7 +203,8 @@ write_receipt() {
     --argjson deadline_epoch "$deadline_epoch" \
     --argjson poc_accepted_once "$poc_accepted_once" --argjson poc_accepted_epoch "$poc_accepted_epoch" \
     --argjson poc_participant_weight "$poc_participant_weight" --argjson poc_accepted_weight_sum "$poc_accepted_weight_sum" --argjson poc_committed_total "$poc_committed_total" \
-    '{schema_version:1,verdict:$verdict,reason:$reason,run_id:$run_id,chain_id:$chain_id,genesis_sha256:$genesis_sha256,participant_address:$participant_address,validator_key:$validator_key,runtime_id:$runtime_id,public_host:$public_host,runbook_commit:$runbook_commit,profile_hash:$profile_hash,operator_mode:$operator_mode,deadline_epoch:$deadline_epoch,poc_accepted_once:$poc_accepted_once,poc_accepted_epoch:$poc_accepted_epoch,poc_participant_weight:$poc_participant_weight,poc_accepted_weight_sum:$poc_accepted_weight_sum,poc_committed_total:$poc_committed_total}' \
+    --arg poc_distribution_tx_hash "$poc_distribution_tx_hash" --argjson poc_distribution_tx_code "$poc_distribution_tx_code" \
+    '{schema_version:1,verdict:$verdict,reason:$reason,run_id:$run_id,chain_id:$chain_id,genesis_sha256:$genesis_sha256,participant_address:$participant_address,validator_key:$validator_key,runtime_id:$runtime_id,public_host:$public_host,runbook_commit:$runbook_commit,profile_hash:$profile_hash,operator_mode:$operator_mode,deadline_epoch:$deadline_epoch,poc_accepted_once:$poc_accepted_once,poc_accepted_epoch:$poc_accepted_epoch,poc_participant_weight:$poc_participant_weight,poc_accepted_weight_sum:$poc_accepted_weight_sum,poc_committed_total:$poc_committed_total,poc_distribution_tx_hash:$poc_distribution_tx_hash,poc_distribution_tx_code:$poc_distribution_tx_code}' \
     >"$RUN/receipt.json"
 }
 
@@ -147,6 +267,8 @@ while (( SECONDS < deadline_seconds )); do
   printf '%s\n' "$group" >"$RUN/epoch-group.json"
   printf '%s\n' "$hardware" >"$RUN/hardware-nodes.json"
   printf '%s\n' "$validators" >"$RUN/validators.json"
+  capture_poc_stage_trace "$group" "$epoch" \
+    || fail 'cannot capture the canonical PoC-stage trace required for join diagnosis'
 
   participant_active=false
   jq -e '.participant.status == "ACTIVE" or .participant.status == "PARTICIPANT_STATUS_ACTIVE" or .participant.status == "1" or .participant.status == 1' \
@@ -163,8 +285,8 @@ while (( SECONDS < deadline_seconds )); do
   participant_weight="$(jq -er '.participant_weight | tonumber' "$weight_evidence")"
   accepted_weight_sum="$(jq -er '.accepted_weight_sum | tonumber' "$weight_evidence")"
   committed_total="$(jq -er '.committed_total | tonumber' "$weight_evidence")"
-  jq --argjson epoch "$epoch" --slurpfile weight "$weight_evidence" \
-    '. + [{epoch:$epoch,weight_evidence:$weight[0]}]' "$RUN/poc-acceptance-observations.json" \
+  jq --argjson epoch "$epoch" --argjson canonical_poc_start_block_height "$(jq -er '.epoch_group_data.poc_start_block_height | tonumber' "$RUN/epoch-group.json")" --slurpfile weight "$weight_evidence" \
+    '. + [{epoch:$epoch,canonical_poc_start_block_height:$canonical_poc_start_block_height,weight_evidence:$weight[0]}]' "$RUN/poc-acceptance-observations.json" \
     >"$RUN/poc-acceptance-observations.tmp"
   mv "$RUN/poc-acceptance-observations.tmp" "$RUN/poc-acceptance-observations.json"
   if [[ "$distribution_integrity" != true && "$accepted_weight_sum" -gt 0 ]]; then
@@ -178,6 +300,11 @@ while (( SECONDS < deadline_seconds )); do
     poc_participant_weight="$participant_weight"
     poc_accepted_weight_sum="$accepted_weight_sum"
     poc_committed_total="$committed_total"
+    canonical_stage="$(jq -er '.epoch_group_data.poc_start_block_height | tonumber' "$RUN/epoch-group.json")"
+    capture_poc_distribution_transactions "$canonical_stage" \
+      || fail "accepted PoC weight lacks a code=0 distribution transaction bound to canonical stage $canonical_stage"
+    poc_distribution_tx_hash="$(jq -er '.[0].tx_hash' "$RUN/poc-distribution-transactions-$canonical_stage.json")"
+    poc_distribution_tx_code="$(jq -er '.[0].tx_code | tonumber' "$RUN/poc-distribution-transactions-$canonical_stage.json")"
   fi
   validator_effective=false
   jq -e --arg key "$VALIDATOR_KEY" '
@@ -213,8 +340,15 @@ KEY_FILE="${GDC_JOIN_GATEWAY_CLIENT_KEY_FILE:-}"
   || blocked 'GDC_JOIN_GATEWAY_CLIENT_KEY_FILE is required for the final authenticated gateway regression'
 [[ "$(stat -c %a "$KEY_FILE")" == 600 ]] \
   || blocked 'GDC_JOIN_GATEWAY_CLIENT_KEY_FILE must have mode 0600'
+case "${KEY_FILE##*/}" in
+  gateway.admin-key|gateway.client-keys|gateway.telegram-client-key|operator.keyring|*.keyring)
+    blocked 'GDC_JOIN_GATEWAY_CLIENT_KEY_FILE must be a separately scoped join client credential, not an administrative or consumer credential'
+    ;;
+esac
 CLIENT_KEY="$(cut -d, -f1 <"$KEY_FILE")"
 [[ -n "$CLIENT_KEY" ]] || blocked 'GDC_JOIN_GATEWAY_CLIENT_KEY_FILE is empty'
+[[ "$CLIENT_KEY" != sk-admin-* ]] \
+  || blocked 'GDC_JOIN_GATEWAY_CLIENT_KEY_FILE contains an administrative credential, not a client credential'
 step 'Run one authenticated gateway regression (routing through the new Host is not required)'
 "$ROOT/04-ops/test-inference-until-ready.sh" \
   "https://$API_HOST" "$CLIENT_KEY" "$RUN/gateway-regression" \
@@ -227,7 +361,7 @@ cat >"$RUN/verdict.md" <<EOF
 
 - participant: $ADDRESS ACTIVE;
 - runtime: $RUNTIME_ID is chain-recorded;
-- PoC: positive accepted validation weight observed in epoch $poc_accepted_epoch with participant weight $poc_participant_weight and accepted sum $poc_accepted_weight_sum matching committed total $poc_committed_total;
+- PoC: positive accepted validation weight observed in epoch $poc_accepted_epoch with participant weight $poc_participant_weight and accepted sum $poc_accepted_weight_sum matching committed total $poc_committed_total; distribution transaction $poc_distribution_tx_hash committed with chain code $poc_distribution_tx_code;
 - validator: $VALIDATOR_KEY has positive live consensus voting power;
 - gateway: authenticated regression succeeded.
 EOF

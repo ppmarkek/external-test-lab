@@ -3,7 +3,7 @@ set -Eeuo pipefail
 source "$(dirname "$0")/lib.sh"
 load_project
 
-RUN="$GDC_HOME/runs/$(date -u +%Y%m%dT%H%M%SZ)-bridge-deploy-sepolia"
+RUN="$GDC_HOME/runs/${GDC_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}-bridge-deploy-sepolia"
 mkdir -p "$RUN"
 install_evidence_exit_trap 'Sepolia bridge deployment'
 record_phase_profile bridge-deploy-sepolia

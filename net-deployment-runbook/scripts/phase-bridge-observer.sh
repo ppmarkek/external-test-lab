@@ -11,7 +11,7 @@ topology_contains_node "$node" || die "bridge observer host is not in GDC_NODE_A
 contract="${GDC_SEPOLIA_CONTRACT:-}"
 [[ "$contract" =~ ^0x[0-9A-Fa-f]{40}$ ]] || die 'GDC_SEPOLIA_CONTRACT must be the authorized Sepolia contract address'
 
-RUN="$GDC_HOME/runs/$(date -u +%Y%m%dT%H%M%SZ)-bridge-observer-$action-$node"
+RUN="$GDC_HOME/runs/${GDC_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}-bridge-observer-$action-$node"
 mkdir -p "$RUN"
 install_evidence_exit_trap 'Sepolia bridge observer'
 record_phase_profile "bridge-observer-$action"

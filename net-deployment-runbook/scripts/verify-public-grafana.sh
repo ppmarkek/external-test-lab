@@ -27,7 +27,14 @@ while (( SECONDS < panel_deadline )); do
   : >"$RUN/panel-results.jsonl"
   missing_expression=''
   while IFS= read -r expression; do
-    payload="$(jq -cn --arg expression "$expression" '{
+    # A dashboard may use `or vector(0)` for presentation, but that synthetic
+    # fallback is never evidence that the underlying metric exists. Query the
+    # source expression separately and require a real frame from it.
+    source_expression="$expression"
+    if [[ "$expression" == *' or vector(0)' ]]; then
+      source_expression="${expression% or vector(0)}"
+    fi
+    payload="$(jq -cn --arg expression "$source_expression" '{
       from:"now-15m",
       to:"now",
       queries:[{
@@ -44,8 +51,8 @@ while (( SECONDS < panel_deadline )); do
       -H 'Content-Type: application/json' --data "$payload")"
     http_code="${response##*$'\n'}"
     result="${response%$'\n'*}"
-    jq -cn --arg expression "$expression" --arg http_code "$http_code" --argjson result "$result" \
-      '{expression:$expression,http_code:($http_code|tonumber),result:$result}' >>"$RUN/panel-results.jsonl"
+    jq -cn --arg expression "$expression" --arg source_expression "$source_expression" --arg http_code "$http_code" --argjson result "$result" \
+      '{expression:$expression,source_expression:$source_expression,http_code:($http_code|tonumber),result:$result}' >>"$RUN/panel-results.jsonl"
     if [[ "$http_code" != 200 ]] || ! jq -e '
       (.results.A.error? | not)
       and ([.results.A.frames[]?.data.values[]? | length] | any(. > 0))

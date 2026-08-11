@@ -29,6 +29,10 @@ MAX_HISTORY_MESSAGES = int(os.environ.get("CONVERSATION_MAX_MESSAGES", "12"))
 MAX_HISTORY_CHARS = int(os.environ.get("CONVERSATION_MAX_CHARS", "6000"))
 MAX_USER_MESSAGE_CHARS = int(os.environ.get("USER_MESSAGE_MAX_CHARS", "2000"))
 MAX_OUTPUT_TOKENS = int(os.environ.get("MAX_OUTPUT_TOKENS", "512"))
+# A lifecycle probe must finish within a short safe inference window.  It is
+# deliberately distinct from the user-facing response limit: the probe proves
+# the Conversations API/accounting path, not long-form model generation.
+PROBE_MAX_OUTPUT_TOKENS = int(os.environ.get("PROBE_MAX_OUTPUT_TOKENS", "8"))
 HEALTH_MAX_AGE_SECONDS = int(os.environ.get("HEALTH_MAX_AGE_SECONDS", "900"))
 TG_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 THINK_BLOCK = re.compile(r"<think\b[^>]*>.*?</think\s*>", re.IGNORECASE | re.DOTALL)
@@ -305,7 +309,7 @@ def record_inference(db: sqlite3.Connection, outcome: str, usage=None) -> None:
     publish_metrics(db)
 
 
-def gateway_completion(db: sqlite3.Connection, conversation_id: str, input_text: str):
+def gateway_completion(db: sqlite3.Connection, conversation_id: str, input_text: str, max_output_tokens=None):
     conversation = db.execute(
         "SELECT conversation_id FROM conversations WHERE conversation_id = ?", (conversation_id,)
     ).fetchone()
@@ -313,10 +317,13 @@ def gateway_completion(db: sqlite3.Connection, conversation_id: str, input_text:
         raise ValueError("conversation not found")
     messages = bounded_history(db, conversation_id)
     messages.append({"role": "user", "content": input_text})
+    max_output_tokens = MAX_OUTPUT_TOKENS if max_output_tokens is None else max_output_tokens
+    if not isinstance(max_output_tokens, int) or not 1 <= max_output_tokens <= MAX_OUTPUT_TOKENS:
+        raise ValueError("max_output_tokens must be a positive integer no larger than the configured limit")
     body = json.dumps({
         "model": MODEL,
         "messages": messages,
-        "max_tokens": MAX_OUTPUT_TOKENS,
+        "max_tokens": max_output_tokens,
         "temperature": 0.2,
     }).encode()
     request = Request(
@@ -438,7 +445,7 @@ class ConversationAPIHandler(BaseHTTPRequestHandler):
                     input_text = payload.get("input")
                     if not isinstance(conversation_id, str) or not isinstance(input_text, str):
                         raise ValueError("conversation and input are required")
-                    self.send_json(200, gateway_completion(db, conversation_id, input_text))
+                    self.send_json(200, gateway_completion(db, conversation_id, input_text, payload.get("max_output_tokens")))
                     return
             self.send_json(404, {"error": {"message": "not found"}})
         except ValueError as error:
@@ -522,7 +529,11 @@ def run_probe() -> dict:
     conversation = internal_api_request("/v1/conversations", {})
     response = internal_api_request(
         "/v1/responses",
-        {"conversation": conversation["id"], "input": "Reply exactly GDC_OK"},
+        {
+            "conversation": conversation["id"],
+            "input": "Reply exactly GDC_OK",
+            "max_output_tokens": PROBE_MAX_OUTPUT_TOKENS,
+        },
     )
     return {
         "status": response.get("status"),

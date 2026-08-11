@@ -10,6 +10,7 @@ expected=(
   bridge.jwt
   gateway.admin-key
   gateway.client-keys
+  gateway.join-client-key
   gateway.telegram-client-key
   gdc-node0.keyring
   gdc-node0.postgres
@@ -45,6 +46,7 @@ grep -Fq -- '--skip-qualification' "$ROOT/ROLE-GENESIS.md"
 grep -Fq 'phase-bootstrap-access.sh' "$ROOT/scripts/phase-genesis.sh"
 grep -Fq 'Require bounded Genesis validator effectiveness before lifecycle success' "$ROOT/scripts/phase-genesis.sh"
 grep -Fq 'phase-join-acceptance.sh' "$ROOT/scripts/phase-genesis.sh"
+grep -Fq 'gateway.join-client-key' "$ROOT/scripts/phase-genesis.sh"
 grep -Fq 'cold-address backup disagrees with the keyring' "$ROOT/01-identities-genesis/create-cold-accounts.sh"
 grep -Fq '"$BACKUP_DIR/$name.address"' "$ROOT/01-identities-genesis/create-cold-accounts.sh"
 grep -Fq 'cold-address references' "$ROOT/scripts/phase-identities.sh"

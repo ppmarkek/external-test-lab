@@ -18,6 +18,8 @@ grep -Fq 'INTERNAL_API_TOKEN=$BOT_INTERNAL_API_TOKEN' "$deploy"
 grep -Fq 'Telegram conversation consumer is not yet ready' "$deploy"
 grep -Fq 'python3 /app/bot.py --probe' "$deploy"
 grep -Fq 'HEALTH_MAX_AGE_SECONDS=' "$deploy"
+grep -Fq 'PROBE_MAX_OUTPUT_TOKENS=8' "$deploy"
+grep -Fq 'max_output_tokens' "$ROOT/scripts/telegram-bot/bot.py"
 ! grep -Eq 'gateway-key-pool|POOL_SOURCE|key issuer' "$deploy"
 
 grep -Fq '@telegram_consumer path /status/telegram-consumer' "$ROOT/04-ops/edge-node/PublicCaddyfile"

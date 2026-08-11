@@ -6,14 +6,13 @@
   encode zstd gzip
   @root path /
   redir @root /dashboard/gonka/gov 308
-  # The Network Node proxy accepts its public edge as a trusted upstream.
-  # Send participant-local public traffic through the public edge so callback requests
-  # do not arrive at the proxy from its own Docker bridge and get rejected.
-  reverse_proxy https://{$PUBLIC_EDGE_HOST} {
-    transport http {
-      tls_server_name {$PUBLIC_EDGE_HOST}
-    }
-    header_up Host {$PUBLIC_EDGE_HOST}
+  # This hostname is the participant's registered inference URL.  Proof
+  # validators must therefore reach this Host's own DAPI/proxy and artifact
+  # store, not the shared public edge (which routes normal user traffic to the
+  # gateway Host).  Caddy uses host networking, so the loopback-bound proxy is
+  # reachable without exposing the local control plane publicly.
+  reverse_proxy 127.0.0.1:8000 {
+    header_up Host {$PUBLIC_HOST}
   }
   header {
     X-Content-Type-Options nosniff

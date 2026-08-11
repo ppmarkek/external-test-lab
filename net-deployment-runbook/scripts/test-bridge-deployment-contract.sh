@@ -13,6 +13,9 @@ grep -Fq 'must have mode 0600' "$DEPLOY"
 ! grep -Fq 'mode 0600 or 0400' "$DEPLOY"
 grep -Fq 'bridge_deploy_exit' "$DEPLOY"
 grep -Fq 'Sepolia bridge deployment: BLOCKED' "$DEPLOY"
+grep -Fq 'GDC_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)' "$DEPLOY"
+grep -Fq 'GDC_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)' "$ROOT/scripts/phase-bridge-register-sepolia.sh"
+grep -Fq 'GDC_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)' "$ROOT/scripts/phase-bridge-observer.sh"
 ! grep -Fq 'GDC_SEPOLIA_PRIVATE_KEY=' "$ROOT/.env.example"
 
 echo 'PASS bridge deployment safety contract'

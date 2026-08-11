@@ -53,10 +53,10 @@ values=(
   "MONITORING_CIDR=$MONITORING_CIDR"
 )
 
-# The three public DevNet origins deliberately terminate only on the configured
-# public edge. Keeping this
-# selection in the rendered env prevents every participant edge proxy from
-# attempting to obtain the same ACME certificates.
+# The three shared public DevNet origins deliberately terminate only on the
+# configured public edge. Participant-specific hostnames remain local TLS
+# origins because chain PoC proof requests must resolve to that participant's
+# own artifact store.
 if [[ "$NODE" == "$PUBLIC_EDGE_NODE" ]]; then
   values+=(
     "PUBLIC_EDGE=true"
@@ -65,7 +65,7 @@ if [[ "$NODE" == "$PUBLIC_EDGE_NODE" ]]; then
     "GRAFANA_HOST=$GRAFANA_HOST"
   )
 else
-  values+=("PUBLIC_EDGE=false" "PUBLIC_EDGE_HOST=$PUBLIC_EDGE_HOST")
+  values+=("PUBLIC_EDGE=false")
 fi
 
 write_env "$OUTPUT" "${values[@]}"
