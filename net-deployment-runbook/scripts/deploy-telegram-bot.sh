@@ -93,13 +93,19 @@ ssh -T "$BOT_HOST" "set -Eeuo pipefail
 consumer_ready=false
 deadline=$((SECONDS + VERIFY_TIMEOUT_SECONDS))
 while (( SECONDS < deadline )); do
-  if ssh -T "$BOT_HOST" 'set -Eeuo pipefail
-    bot="$(docker ps -q --filter name=gonka-devnet-bot-bot)"
-    [[ -n "$bot" && "$(docker inspect -f "{{.State.Health.Status}}" "$bot")" == healthy ]]
-    curl -fsS http://127.0.0.1:9464/metrics | grep -q "^gdc_telegram_bot_up 1$"
-    docker exec "$bot" python3 -c "import json, os; from urllib.request import urlopen; assert json.load(urlopen(\"https://api.telegram.org/bot\" + os.environ[\"TELEGRAM_BOT_TOKEN\"] + \"/getMe\", timeout=15))[\"ok\"]"
-    docker exec "$bot" python3 /app/bot.py --probe \
-      | jq -e ".status == \"completed\" and .output_present == true and .usage_present == true" >/dev/null'; then
+  remaining=$((deadline - SECONDS))
+  (( remaining > 0 )) || break
+  if ssh -T "$BOT_HOST" bash -s -- "$remaining" <<'REMOTE'
+set -Eeuo pipefail
+remaining="$1"
+bot="$(docker ps -q --filter name=gonka-devnet-bot-bot)"
+[[ -n "$bot" && "$(docker inspect -f '{{.State.Health.Status}}' "$bot")" == healthy ]]
+curl -fsS http://127.0.0.1:9464/metrics | grep -q '^gdc_telegram_bot_up 1$'
+docker exec "$bot" python3 -c 'import json, os; from urllib.request import urlopen; assert json.load(urlopen("https://api.telegram.org/bot" + os.environ["TELEGRAM_BOT_TOKEN"] + "/getMe", timeout=15))["ok"]'
+timeout "$remaining" docker exec "$bot" python3 /app/bot.py --probe \
+  | jq -e '.status == "completed" and .output_present == true and .usage_present == true' >/dev/null
+REMOTE
+  then
     consumer_ready=true
     break
   fi
