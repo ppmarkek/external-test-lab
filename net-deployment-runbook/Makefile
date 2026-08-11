@@ -43,6 +43,21 @@ test:
 	@./scripts/verify-release-profiles.sh
 	@./scripts/test-profiles.sh
 	@./scripts/test-participant-state.sh
+	@./scripts/test-runtime-identity.sh
+	@./scripts/test-join-acceptance-contract.sh
+	@./scripts/test-genesis-lineage-normalization.sh
+	@./scripts/test-validation-weight-evidence.sh
+	@./scripts/test-public-network-observer.sh
+	@./scripts/test-public-network-observer-fixtures.sh
+	@./scripts/test-public-network-weight-fixture.sh
+	@./scripts/test-public-network-topology-fixture.sh
+	@./scripts/test-public-network-receipt-fixture.sh
+	@./scripts/test-host-upgrade-contract.sh
+	@./scripts/test-public-upgrade-contract.sh
+	@./scripts/test-public-upgrade-lineage-fixture.sh
+	@./scripts/test-bridge-deployment-contract.sh
+	@./scripts/test-observability-contract.sh
+	@./scripts/test-observability-stale-fixture.sh
 	@./scripts/test-reset-evidence.sh
 	@./scripts/test-upgrade-blocked-verdict.sh
 	@./scripts/test-upgrade-state-comparison.sh
@@ -61,3 +76,4 @@ test:
 	@./scripts/test-role-separation.sh
 	@./scripts/test-domain-cli.sh
 	@./scripts/test-explicit-public-host.sh
+	@./scripts/test-cleanroom-contract.sh

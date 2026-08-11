@@ -58,7 +58,11 @@ while (( SECONDS < deadline )); do
     reason='routable_runtime_observed'
   fi
 
-  payload='{"model":"Qwen/Qwen3-0.6B","messages":[{"role":"user","content":"Reply with exactly: GDC_OK"}],"temperature":0}'
+  # Keep the readiness probe bounded.  Without an explicit token limit the
+  # model may continue a trivial acknowledgement until the HTTP timeout,
+  # which leaves an in-flight request in the gateway and makes following
+  # probes report a misleading capacity failure.
+  payload='{"model":"Qwen/Qwen3-0.6B","messages":[{"role":"user","content":"Reply with exactly: GDC_OK"}],"max_tokens":8,"temperature":0}'
   set +e
   completion_http="$(curl -sS --connect-timeout 10 --max-time 90 -o "$completion_file" -w '%{http_code}' \
     "$api_url/v1/chat/completions" -H "Authorization: Bearer $client_key" \

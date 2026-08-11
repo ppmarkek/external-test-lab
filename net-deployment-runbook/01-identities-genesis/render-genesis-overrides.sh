@@ -21,6 +21,21 @@ load_profiles
 TEMPLATE="$ROOT/01-identities-genesis/genesis-overrides.template.json"
 GENESIS_GUARDIAN_ENABLED="${GDC_GENESIS_GUARDIAN_ENABLED:-false}"
 [[ "$GENESIS_GUARDIAN_ENABLED" =~ ^(true|false)$ ]] || { echo 'GDC_GENESIS_GUARDIAN_ENABLED must be true or false' >&2; exit 2; }
+for timing_name in GENESIS_EPOCH_LENGTH GENESIS_POC_STAGE_DURATION GENESIS_POC_EXCHANGE_DURATION GENESIS_POC_VALIDATION_DELAY GENESIS_POC_VALIDATION_DURATION GENESIS_SET_NEW_VALIDATORS_DELAY GENESIS_INFERENCE_VALIDATION_CUTOFF; do
+  timing_value="${!timing_name:-}"
+  [[ "$timing_value" =~ ^[1-9][0-9]*$ ]] || { echo "$timing_name must be a positive integer" >&2; exit 2; }
+done
+# A confirmation PoC may only start after the regular PoC has selected its
+# validators.  Reserve enough of each epoch for the complete confirmation
+# lifecycle plus its cutoff, rather than accepting a profile that can never
+# emit the public lineage the runbook requires.
+regular_set_height=$((GENESIS_POC_STAGE_DURATION + GENESIS_POC_VALIDATION_DELAY + GENESIS_POC_VALIDATION_DURATION + GENESIS_SET_NEW_VALIDATORS_DELAY))
+confirmation_window=$((GENESIS_POC_STAGE_DURATION + GENESIS_POC_EXCHANGE_DURATION + GENESIS_POC_VALIDATION_DELAY + GENESIS_POC_VALIDATION_DURATION + GENESIS_SET_NEW_VALIDATORS_DELAY))
+minimum_epoch_length=$((regular_set_height + GENESIS_INFERENCE_VALIDATION_CUTOFF + confirmation_window))
+(( GENESIS_EPOCH_LENGTH >= minimum_epoch_length )) || {
+  echo "GENESIS_EPOCH_LENGTH=$GENESIS_EPOCH_LENGTH cannot contain a complete confirmation PoC; need at least $minimum_epoch_length" >&2
+  exit 2
+}
 guardian_addresses='[]'
 guardian_threshold='0'
 guardian_multiplier='{"value":"0","exponent":0}'
@@ -34,7 +49,10 @@ jq --arg model "$MODEL_ID" --arg revision "$MODEL_REVISION" --arg guardian "$GUA
   --argjson vram "$GENESIS_V_RAM" --argjson throughput "$GENESIS_THROUGHPUT_PER_NONCE" \
   --argjson units "$GENESIS_UNITS_OF_COMPUTE_PER_TOKEN" --argjson seq "$GENESIS_SEQ_LEN" --argjson guardian_enabled "$GENESIS_GUARDIAN_ENABLED" \
   --argjson guardian_addresses "$guardian_addresses" --argjson guardian_threshold "$guardian_threshold" --argjson guardian_multiplier "$guardian_multiplier" \
-  --argjson epoch_length "$GENESIS_EPOCH_LENGTH" --argjson epoch_shift "$GENESIS_EPOCH_SHIFT" '
+  --argjson epoch_length "$GENESIS_EPOCH_LENGTH" --argjson epoch_shift "$GENESIS_EPOCH_SHIFT" \
+  --argjson poc_stage_duration "$GENESIS_POC_STAGE_DURATION" --argjson poc_exchange_duration "$GENESIS_POC_EXCHANGE_DURATION" \
+  --argjson poc_validation_delay "$GENESIS_POC_VALIDATION_DELAY" --argjson poc_validation_duration "$GENESIS_POC_VALIDATION_DURATION" \
+  --argjson set_new_validators_delay "$GENESIS_SET_NEW_VALIDATORS_DELAY" --argjson inference_validation_cutoff "$GENESIS_INFERENCE_VALIDATION_CUTOFF" '
   .app_state.inference.params.devshard_escrow_params.allowed_creator_addresses = []
   | .app_state.inference.params.devshard_escrow_params.approved_versions = []
   | .app_state.inference.params.genesis_guardian_params.network_maturity_threshold = ($guardian_threshold | tostring)
@@ -50,6 +68,12 @@ jq --arg model "$MODEL_ID" --arg revision "$MODEL_REVISION" --arg guardian "$GUA
   | .app_state.inference.params.poc_params.models[0].seq_len = ($seq | tostring)
   | .app_state.inference.params.epoch_params.epoch_length = ($epoch_length | tostring)
   | .app_state.inference.params.epoch_params.epoch_shift = ($epoch_shift | tostring)
+  | .app_state.inference.params.epoch_params.poc_stage_duration = ($poc_stage_duration | tostring)
+  | .app_state.inference.params.epoch_params.poc_exchange_duration = ($poc_exchange_duration | tostring)
+  | .app_state.inference.params.epoch_params.poc_validation_delay = ($poc_validation_delay | tostring)
+  | .app_state.inference.params.epoch_params.poc_validation_duration = ($poc_validation_duration | tostring)
+  | .app_state.inference.params.epoch_params.set_new_validators_delay = ($set_new_validators_delay | tostring)
+  | .app_state.inference.params.epoch_params.inference_validation_cutoff = ($inference_validation_cutoff | tostring)
   | .app_state.inference.model_list[0].id = $model
   | .app_state.inference.model_list[0].hf_repo = $model
   | .app_state.inference.model_list[0].hf_commit = $revision

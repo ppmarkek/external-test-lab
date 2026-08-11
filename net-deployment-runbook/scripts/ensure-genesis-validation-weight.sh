@@ -9,9 +9,9 @@ load_project
 # a validation weight. This also keeps non-guardian Genesis deployments valid.
 candidates=()
 for node in "${GDC_NODES[@]}"; do
-  account="$ACCOUNTS/$node-cold.json"
+  account="$(node_account_file "$node")"
   [[ -s "$account" ]] || continue
-  [[ "$node" == "$GENESIS_NODE" || -e "$STATE/joined/$node" ]] || continue
+  [[ "$node" == "$GENESIS_NODE" || -e "$(node_joined_marker "$node")" ]] || continue
   candidates+=("$(jq -er .address "$account")")
 done
 (( ${#candidates[@]} > 0 )) || die 'no configured Genesis or joined participant account is available for validation-weight verification'

@@ -5,9 +5,23 @@ load_project
 record_phase_profile verify
 CHAIN_BASE="${GDC_CHAIN_PUBLIC_BASE:-https://$PUBLIC_EDGE_HOST}"
 CHAIN_BASE="${CHAIN_BASE%/}"
-RUN="$GDC_HOME/runs/$(date -u +%Y%m%dT%H%M%SZ)"
+RUN="$GDC_HOME/runs/${GDC_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-manual}/verify"
 mkdir -p "$RUN"
 VERDICT_WRITTEN=false
+blocked() {
+  local reason="$1"
+  VERDICT_WRITTEN=true
+  cat >"$RUN/verdict.md" <<EOF
+# DevNet verification: BLOCKED
+
+$reason
+
+No network PASS is implied. Supply the required safe precondition or select a
+profile that explicitly supports the requested verification, then retry.
+EOF
+  printf 'BLOCKED %s; evidence: %s\n' "$reason" "$RUN" >&2
+  exit 3
+}
 on_exit() {
   local rc=$?
   if (( rc != 0 )) && [[ "$VERDICT_WRITTEN" == false ]]; then
@@ -24,6 +38,7 @@ trap on_exit EXIT
 step 'Record environment and topology'
 capture_canonical_genesis "$CHAIN_BASE/chain-rpc/genesis" "$RUN/genesis.json"
 genesis_sha256="$(genesis_sha256 "$RUN/genesis.json")"
+bind_run_manifest_genesis "$genesis_sha256"
 {
   echo "timestamp=$(date -u +%FT%TZ)"
   echo "chain_id=$CHAIN_ID"
@@ -34,6 +49,18 @@ genesis_sha256="$(genesis_sha256 "$RUN/genesis.json")"
   echo "profile_hash=$(profile_hash)"
   echo "model=$MODEL_ID@$MODEL_REVISION"
 } >"$RUN/environment.txt"
+
+# A normal PoC group is not evidence that confirmation-PoC is enabled.  The
+# fast profile must expose one confirmation per epoch and a finite upgrade
+# protection window before this phase can issue any network-level PASS.
+jq -e '
+  .app_state.inference.params as $params
+  | $params.poc_params.confirmation_poc_v2_enabled == true
+  and $params.confirmation_poc_params.expected_confirmations_per_epoch == "1"
+  and $params.confirmation_poc_params.slash_fraction == {"value":"0","exponent":0}
+  and $params.confirmation_poc_params.upgrade_protection_window == "20"
+' "$RUN/genesis.json" >/dev/null \
+  || blocked 'confirmation-PoC fast-profile contract is disabled or differs from the expected bounded settings'
 
 step 'Prove block progress with two state observations'
 deadline=$((SECONDS + 120))
@@ -54,26 +81,39 @@ mapfile -t nodes < <(configured_nodes)
 expected=${#nodes[@]}
 (( expected > 0 )) || die 'no configured participant accounts found'
 
+# A JOIN operator owns evidence only for its own participant.  It cannot know
+# whether unrelated operators have joined later, so a normal verification
+# proves that its local participant is active.  A test controller or a
+# deliberately aggregated operator state can opt into a complete-set check.
+complete_topology="${GDC_VERIFY_COMPLETE_TOPOLOGY:-false}"
+[[ "$complete_topology" == true || "$complete_topology" == false ]] \
+  || die 'GDC_VERIFY_COMPLETE_TOPOLOGY must be true or false'
+complete_topology_json="$complete_topology"
+
 # Fail before the full-epoch wait when local operator state omits an ACTIVE
 # chain participant. Otherwise a reset runtime could disappear from the
 # evidence set merely because its local joined marker was removed.
 step 'Reconcile the complete ACTIVE chain participant set with joined state'
 printf '[]' >"$RUN/expected-participant-addresses.json"
 for node in "${nodes[@]}"; do
-  address="$(jq -er .address "$ACCOUNTS/$node-cold.json")"
+  address="$(jq -er .address "$(node_account_file "$node")")"
   jq --arg address "$address" '. + [$address]' "$RUN/expected-participant-addresses.json" \
     >"$RUN/expected-participant-addresses.tmp"
   mv "$RUN/expected-participant-addresses.tmp" "$RUN/expected-participant-addresses.json"
 done
 ssh "$GENESIS_NODE" 'curl -fsS http://127.0.0.1:1317/productscience/inference/inference/participant' \
   >"$RUN/participants-chain.json"
-jq -e --slurpfile expected "$RUN/expected-participant-addresses.json" '
+jq -e --argjson complete_topology "$complete_topology_json" --slurpfile expected "$RUN/expected-participant-addresses.json" '
   ([.participant[]
-    | select(.status == "ACTIVE" or .status == "PARTICIPANT_STATUS_ACTIVE" or .status == "1")
-    | .address] | sort)
-  == ($expected[0] | sort)
+    | select(.status == "ACTIVE" or .status == "PARTICIPANT_STATUS_ACTIVE" or .status == "1" or .status == 1)
+    | .address] | sort) as $active
+  | ($expected[0] | sort) as $expected
+  | if $complete_topology
+    then $active == $expected
+    else ($expected | all(. as $address | $active | index($address) != null))
+    end
 ' "$RUN/participants-chain.json" >/dev/null \
-  || die 'ACTIVE chain participants differ from joined state; restore or reset the topology before verify'
+  || die 'configured participant state does not match the live ACTIVE set; restore or reset the topology before verify'
 
 epoch_blocks="${GDC_VERIFY_EPOCH_BLOCKS:-$GENESIS_EPOCH_LENGTH}"
 epoch_timeout="${GDC_EPOCH_WAIT_TIMEOUT_SECONDS:-2400}"
@@ -101,10 +141,10 @@ while (( SECONDS < deadline )); do
 done
 (( current >= epoch_target )) || die "chain did not reach the next epoch-group activation from $first"
 
-step "Prove exactly $expected ACTIVE participants"
+step "Prove $expected configured participant(s) are ACTIVE"
 printf '[]' >"$RUN/participants.json"
 for node in "${nodes[@]}"; do
-  address="$(jq -r .address "$ACCOUNTS/$node-cold.json")"
+  address="$(jq -r .address "$(node_account_file "$node")")"
   body="$(curl -fsS "$CHAIN_BASE/v2/participants/$address")"
   status="$(jq -r '.participant.status // empty' <<<"$body")"
   [[ "$status" =~ ^(ACTIVE|PARTICIPANT_STATUS_ACTIVE|1)$ ]] || die "$node is not ACTIVE: $status"
@@ -136,6 +176,23 @@ for node in "${nodes[@]}"; do
   mv "$RUN/node-sync.tmp" "$RUN/node-sync.json"
 done
 jq -e '[.[].common_height_hash] | unique | length == 1' "$RUN/node-sync.json" >/dev/null || die 'nodes disagree on common-height block hash'
+step 'Prove configured participants are effective live consensus validators'
+curl -fsS "$CHAIN_BASE/chain-rpc/validators?per_page=100" >"$RUN/validators.json"
+printf '[]' >"$RUN/validator-effectiveness.json"
+for node in "${nodes[@]}"; do
+  identity="$(node_identity_file "$node")"
+  [[ -s "$identity" ]] || die "$node has no local public consensus identity; it cannot be verified as effective"
+  consensus_pubkey="$(jq -er .consensus_pubkey "$identity")"
+  jq -e --arg key "$consensus_pubkey" '
+    .result.validators
+    | any(.[]; .pub_key.value == $key and (.voting_power | tonumber) > 0)
+  ' "$RUN/validators.json" >/dev/null \
+    || die "$node is ACTIVE but not an effective consensus validator with positive voting power"
+  jq --arg node "$node" --arg key "$consensus_pubkey" '
+    . + [{node:$node,consensus_pubkey:$key,validator_effective:true}]
+  ' "$RUN/validator-effectiveness.json" >"$RUN/validator-effectiveness.tmp"
+  mv "$RUN/validator-effectiveness.tmp" "$RUN/validator-effectiveness.json"
+done
 curl -fsS "$CHAIN_BASE/v1/models" >"$RUN/models-chain.json"
 jq -e --arg model "$MODEL_ID" '.data[] | select(.id == $model)' "$RUN/models-chain.json" >/dev/null || die "model $MODEL_ID is absent from the live API"
 # The 0.2.14 decentralized API intentionally exposes the model catalog at
@@ -150,13 +207,30 @@ jq -e '.epoch_group_data.validation_weights | type == "array" and length > 0' "$
 jq -e '(.epoch_group_data.validation_weights | map(.weight | tonumber) | add) as $committed
   | (.epoch_group_data.total_weight | tonumber) as $total
   | $committed > 0 and $committed == $total' "$RUN/current-epoch-group.json" >/dev/null || die 'committed validation-weight total is absent or differs from the epoch total'
+
+# An epoch group is the model-specific PoC quorum selected by the chain, not
+# the validator set.  Requiring every ACTIVE validator to be in that quorum
+# makes a healthy joined network fail verification whenever the current group
+# is intentionally a subset of participants.  Verify both distinct facts:
+# the group is live above, and every configured participant has registered a
+# runtime for the selected model in a valid lifecycle state.
+step 'Prove every configured participant has a chain-recorded model runtime'
+printf '[]' >"$RUN/runtime-identities.json"
 for node in "${nodes[@]}"; do
-  address="$(jq -r .address "$ACCOUNTS/$node-cold.json")"
-  jq -e --arg address "$address" '
-    [(.epoch_group_data.validation_weights[]?.member_address),
-     (.epoch_group_data.member_seed_signatures[]?.member_address)]
-    | index($address) != null
-  ' "$RUN/current-epoch-group.json" >/dev/null || die "$node is absent from the live epoch group"
+  address="$(jq -r .address "$(node_account_file "$node")")"
+  runtime_id="$(runtime_id_for_participant "$address")"
+  ssh "$GENESIS_NODE" \
+    "curl -fsS http://127.0.0.1:1317/productscience/inference/inference/hardware_nodes/$address" \
+    >"$RUN/hardware-nodes-$node.json"
+  jq -e --arg model "$MODEL_ID" --arg runtime_id "$runtime_id" '
+    .nodes.hardware_nodes
+    | any(.[]; .local_id == $runtime_id and (.models | index($model) != null) and (.status == "INFERENCE" or .status == "POC"))
+  ' "$RUN/hardware-nodes-$node.json" >/dev/null \
+    || die "$node has no chain-recorded $runtime_id runtime in INFERENCE or POC state"
+  jq --arg node "$node" --arg address "$address" --arg runtime_id "$runtime_id" \
+    '. + [{node:$node,participant_address:$address,runtime_id:$runtime_id}]' \
+    "$RUN/runtime-identities.json" >"$RUN/runtime-identities.tmp"
+  mv "$RUN/runtime-identities.tmp" "$RUN/runtime-identities.json"
 done
 
 step 'Record direct ML qualification as component evidence only'
@@ -207,7 +281,10 @@ cat >"$RUN/verdict.md" <<EOF
 - $expected configured logical participants are ACTIVE;
 - block height advanced from $first to $current, crossing one complete $epoch_blocks-block epoch;
 - every joined node is within $lag_threshold blocks and shares the block hash at height $common_height;
-- $MODEL_ID has a live group with non-empty validation weights;
+- every configured participant is present in the live consensus validator set
+  with positive voting power;
+- $MODEL_ID has a live group with non-empty validation weights, while every
+  configured participant has a chain-recorded runtime in INFERENCE or POC;
 - direct ML model/completion evidence is retained separately and is not treated
   as chain-accounted inference;
 - output style assessment: $STYLE.

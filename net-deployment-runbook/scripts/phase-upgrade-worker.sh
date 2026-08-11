@@ -2,39 +2,16 @@
 set -Eeuo pipefail
 source "$(dirname "$0")/lib.sh"
 load_project
-[[ "$GDC_RELEASE_PROFILE" == v2026.08.06 ]] || die 'upgrade worker target must be v2026.08.06'
-PROPOSAL_ID="${1:-}"
-[[ "$PROPOSAL_ID" =~ ^[1-9][0-9]*$ ]] || die 'usage: upgrade-worker <passed-proposal-id>'
-require_current_baseline_pass
+RUN="$GDC_HOME/runs/${GDC_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-manual}/retired-upgrade-worker"
+mkdir -p "$RUN"
 
-UNIT="gdc-upgrade-proposal-${PROPOSAL_ID}"
-step "Schedule state-based upgrade worker for proposal $PROPOSAL_ID"
-systemctl --user stop "$UNIT.service" 2>/dev/null || true
-systemctl --user stop "$UNIT.timer" 2>/dev/null || true
-systemctl --user reset-failed "$UNIT.service" 2>/dev/null || true
-systemd-run --user --unit="$UNIT" --on-active=5s --working-directory="$ROOT" \
-  --property=TimeoutStartSec=6h --property=Restart=on-failure --property=RestartSec=30s \
-  /usr/bin/env "GDC_HOME=$GDC_HOME" "GDC_UPGRADE_PROPOSAL_ID=$PROPOSAL_ID" GDC_UPGRADE_WAIT=true \
-  "GDC_UPGRADE_WAIT_SECONDS=${GDC_UPGRADE_WAIT_SECONDS:-21600}" \
-  ./gdc.sh --release v2026.08.06 upgrade
+cat >"$RUN/verdict.md" <<'EOF'
+# Centralized upgrade worker: BLOCKED
 
-for _ in $(seq 1 20); do
-  if systemctl --user is-active --quiet "$UNIT.timer"; then
-    cat >"$GDC_HOME/runs/${GDC_RUN_ID}-upgrade-worker.md" <<EOF
-# Upgrade worker: SCHEDULED
-
-- Unit: $UNIT.service
-- Timer: $UNIT.timer
-- Passed proposal: $PROPOSAL_ID
-- Target profile: v2026.08.06
-- State source: Genesis participant loopback RPC over SSH
-- Delayed start: 5 seconds, after the scheduling command releases its lifecycle lock
-- Restart policy: on-failure, 30 seconds
+This legacy worker is retired. A network-owner process must not SSH into or
+upgrade a fleet centrally. Each independent Host operator must run the
+canonical `host upgrade prepare` and `host upgrade watch` commands for the
+passed proposal, followed by the public `network upgrade verify` gate.
 EOF
-    printf 'SCHEDULED %s.timer -> %s.service\n' "$UNIT" "$UNIT"
-    exit 0
-  fi
-  sleep 1
-done
-systemctl --user status "$UNIT.timer" "$UNIT.service" --no-pager >&2 || true
-die "upgrade worker $UNIT.timer was not scheduled"
+printf 'BLOCKED centralized upgrade worker is retired; evidence: %s\n' "$RUN" >&2
+exit 3

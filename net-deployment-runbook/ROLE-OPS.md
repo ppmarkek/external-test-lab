@@ -40,4 +40,11 @@ network or gateway.
 curl -fsS https://gonka-dev.net/ >/dev/null
 curl -fsS https://grafana.gonka-dev.net/login >/dev/null
 ./gdc.sh ops consumer telegram verify
+GDC_NETWORK_EVIDENCE_DIR=/absolute/public-network-verify \
+  ./gdc.sh ops observability verify
 ```
+
+The observability verdict is gated on a public network PASS for the same
+Genesis. It compares direct chain topology with fresh Prometheus scrape series,
+Grafana query results and rendered dashboard output; a reachable Grafana login
+page or stale series is not a PASS.

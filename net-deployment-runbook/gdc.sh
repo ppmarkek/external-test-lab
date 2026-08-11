@@ -4,13 +4,6 @@ set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$ROOT/scripts/lib.sh"
 init_gdc_data_root
-LOCK_FILE="$GDC_DATA_ROOT/.gdc.lock"
-mkdir -p "$GDC_DATA_ROOT"
-exec 9>"$LOCK_FILE"
-if ! flock -n 9; then
-  echo 'another gdc lifecycle phase is already running; wait for it to finish before starting a new one' >&2
-  exit 1
-fi
 
 run_phase() {
   local phase="$1"
@@ -23,6 +16,17 @@ run_phase() {
   # Do not silently append it to the last operator's lifecycle run.
   if [[ -n "${GDC_ASSURANCE_RUN_ID:-}" ]]; then
     run_id="assurance-${GDC_ASSURANCE_RUN_ID}"
+    printf '%s\n' "$run_id" >"$run_id_file"
+  # The repository test harness has the same requirement: a new reset/up
+  # cycle must not append to an arbitrary operator's active lifecycle run.
+  # Keep this separate from GDC_RUN_ID, which load_project may legitimately
+  # restore from the selected Host's active-run-id during ordinary operations.
+  elif [[ -n "${GDC_TEST_RUN_ID:-}" ]]; then
+    [[ "$GDC_TEST_RUN_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || {
+      echo 'GDC_TEST_RUN_ID must be a safe evidence namespace' >&2
+      return 2
+    }
+    run_id="test-${GDC_TEST_RUN_ID}"
     printf '%s\n' "$run_id" >"$run_id_file"
   elif [[ -s "$run_id_file" ]]; then
     run_id="$(<"$run_id_file")"
@@ -71,6 +75,7 @@ See the role guides for required input, then run:
   ./gdc.sh ops faucet
   ./gdc.sh ops monitoring
   ./gdc.sh ops site
+  GDC_NETWORK_EVIDENCE_DIR=<public-network-bundle> ./gdc.sh ops observability verify
   ./gdc.sh ops explorer
   ./gdc.sh ops consumer telegram apply
   ./gdc.sh ops consumer telegram status
@@ -86,7 +91,8 @@ See the role guides for required input, then run:
   ./gdc.sh --release v2026.07.23 gateway settle
   ./gdc.sh --release v2026.08.06 gateway ha v4
   ./gdc.sh --release v2026.07.23 network genesis <SSH_ALIAS>
-  ./gdc.sh --release v2026.07.23 network verify
+  GDC_CHAIN_PUBLIC_BASE=https://node0.gonka-dev.net ./gdc.sh --release v2026.07.23 network verify
+  GDC_CHAIN_PUBLIC_BASE=https://node0.gonka-dev.net GDC_UPGRADE_BASELINE_EVIDENCE_DIR=<baseline-bundle> ./gdc.sh --release v2026.08.06 network upgrade verify <proposal-id>
   ./gdc.sh network reset --yes
   ./gdc.sh host join [--skip-qualification] [--public-host <DNS>] <SSH_ALIAS> [<GPU_SSH_ALIAS>]
   ./gdc.sh --release v2026.07.23 host ml-attach <SSH_ALIAS>
@@ -95,32 +101,12 @@ See the role guides for required input, then run:
   ./gdc.sh --release v2026.08.06 governance devshard submit
   ./gdc.sh --release v2026.08.06 governance devshard verify <proposal-id>
   ./gdc.sh --release v2026.08.06 governance vote <proposal-id> [yes|no|abstain|no_with_veto]
+  ./gdc.sh --release v2026.08.06 upgrade propose
+  ./gdc.sh --release v2026.08.06 host upgrade prepare <SSH_ALIAS> <proposal-id>
+  ./gdc.sh --release v2026.08.06 host upgrade watch <SSH_ALIAS> <proposal-id>
   ./gdc.sh --release v2026.08.06 bridge contract deploy sepolia
   ./gdc.sh --release v2026.08.06 bridge contract register sepolia
   ./gdc.sh --release v2026.08.06 bridge observer apply|status|verify <SSH_ALIAS>
-  ./gdc.sh node stop <SSH_ALIAS>
-  ./gdc.sh node start <SSH_ALIAS>
-  ./gdc.sh node verify <SSH_ALIAS>
-  ./gdc.sh node reset <SSH_ALIAS>
-  ./gdc.sh ops edge
-  ./gdc.sh --release v2026.07.23 verify
-  ./gdc.sh --release v2026.08.06 upgrade-proposal
-  ./gdc.sh --release v2026.08.06 upgrade-worker <proposal-id>
-  ./gdc.sh --release v2026.08.06 advance-after-upgrade <proposal-id>
-  ./gdc.sh --release v2026.08.06 advance-after-upgrade-worker <proposal-id>
-  ./gdc.sh --release v2026.08.06 upgrade
-  ./gdc.sh --release v2026.08.06 governance devshard
-  ./gdc.sh --release v2026.08.06 vote <proposal-id> [yes|no|abstain|no_with_veto]
-  GDC_GATEWAY_VERSION=v3 GDC_GATEWAY_ESCROW_ROTATION_ENABLED=false GDC_GATEWAY_ESCROW_ROTATION_SETTLEMENT_ENABLED=false ./gdc.sh --release v2026.08.06 ops gateway
-  ./gdc.sh --release v2026.08.06 settle
-  GDC_GATEWAY_VERSION=v4 GDC_GATEWAY_ESCROW_ROTATION_ENABLED=false GDC_GATEWAY_ESCROW_ROTATION_SETTLEMENT_ENABLED=false ./gdc.sh --release v2026.08.06 ops gateway
-  ./gdc.sh --release v2026.08.06 settle
-  ./gdc.sh --release v2026.08.06 ha v4
-  ./gdc.sh --release v2026.08.06 bridge-deploy sepolia
-  ./gdc.sh --release v2026.08.06 bridge-register sepolia
-  ./gdc.sh --release v2026.08.06 bridge sepolia
-  ./gdc.sh audit
-
 Start a clean rehearsal with:
   ./gdc.sh reset --yes
 
@@ -146,13 +132,25 @@ done
 COMMAND="${1:-help}"
 shift || true
 
+case "$COMMAND" in
+  verify|upgrade-proposal|upgrade-worker|advance-after-upgrade|advance-after-upgrade-worker|vote|ha|bridge-deploy|bridge-register)
+    echo "legacy command '$COMMAND' is unsupported; use the grouped commands shown by ./gdc.sh help" >&2
+    exit 2
+    ;;
+esac
+
 # Domain aliases make the authority boundary visible without invalidating
 # existing executable evidence that still names the original lifecycle phases.
 case "$COMMAND" in
   network)
     subcommand="${1:-}"; shift || true
     case "$subcommand" in
-      genesis|verify|reset) COMMAND="$subcommand" ;;
+      genesis|reset) COMMAND="$subcommand" ;;
+      verify) COMMAND='public-network-verify' ;;
+      upgrade)
+        [[ "${1:-}" == verify && $# -eq 2 && "${2:-}" =~ ^[1-9][0-9]*$ ]] || { usage; exit 2; }
+        COMMAND='public-upgrade-verify'; set -- "$2"
+        ;;
       *) usage; exit 2 ;;
     esac
     ;;
@@ -162,11 +160,97 @@ case "$COMMAND" in
       join) COMMAND='join' ;;
       ml-attach) COMMAND=ml; set -- attach "$@" ;;
       start|stop|verify|reset) COMMAND=node; set -- "$subcommand" "$@" ;;
+      upgrade)
+        action="${1:-}"; shift || true
+        [[ "$action" =~ ^(prepare|watch)$ && $# -eq 2 && "${2:-}" =~ ^[1-9][0-9]*$ ]] || { usage; exit 2; }
+        COMMAND="host-upgrade-$action"
+        ;;
       *) usage; exit 2 ;;
     esac
     ;;
+  upgrade)
+    action="${1:-}"; shift || true
+    [[ "$action" == propose && $# -eq 0 ]] || { usage; exit 2; }
+    COMMAND='upgrade-proposal'
+    ;;
 esac
+
+# Network-wide phases continue to use one root lock. A Host command launched
+# from that Host's already-selected operator home may opt into a distinct lock
+# only when its caller names the same alias. This is enough to run independent
+# host reset/join/upgrade work concurrently without allowing a Genesis or
+# other shared-chain phase to overlap them.
+LOCK_SCOPE="${GDC_LIFECYCLE_LOCK_SCOPE:-network}"
+ROOT_LOCK_FILE="$GDC_DATA_ROOT/.gdc.lock"
+case "$LOCK_SCOPE" in
+  network)
+    LOCK_FILE="$ROOT_LOCK_FILE"
+    ;;
+  host-*)
+    LOCK_ALIAS="${LOCK_SCOPE#host-}"
+    [[ "$LOCK_ALIAS" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || {
+      echo 'GDC_LIFECYCLE_LOCK_SCOPE host alias is invalid' >&2
+      exit 2
+    }
+    [[ "$COMMAND" =~ ^(node|join|ml|host-upgrade-prepare|host-upgrade-watch)$ ]] || {
+      echo 'a host-scoped lifecycle lock is allowed only for a Host command' >&2
+      exit 2
+    }
+    [[ "$GDC_HOME" == "$GDC_DATA_ROOT/$LOCK_ALIAS" ]] || {
+      echo 'a host-scoped lifecycle lock requires GDC_HOME for that same Host alias' >&2
+      exit 2
+    }
+    LOCK_FILE="$GDC_DATA_ROOT/.gdc-host-$LOCK_ALIAS.lock"
+    ;;
+  *)
+    echo 'GDC_LIFECYCLE_LOCK_SCOPE must be network or host-<SSH_ALIAS>' >&2
+    exit 2
+    ;;
+esac
+mkdir -p "$GDC_DATA_ROOT"
+exec 9>"$ROOT_LOCK_FILE"
+if [[ "$LOCK_SCOPE" == network ]]; then
+  if ! flock -xn 9; then
+    echo 'another gdc lifecycle phase is already running; wait for it to finish before starting a new one' >&2
+    exit 1
+  fi
+else
+  # A Host phase holds a shared root lock as well as its exclusive Host lock.
+  # Consequently it can overlap another Host phase, but never a Genesis or
+  # another network-wide mutation that holds the root lock exclusively.
+  if ! flock -sn 9; then
+    echo 'a network-wide gdc lifecycle phase is already running; wait before starting a Host phase' >&2
+    exit 1
+  fi
+  exec 8>"$LOCK_FILE"
+  if ! flock -n 8; then
+    echo 'another gdc lifecycle phase is already running for this Host; wait for it to finish before starting a new one' >&2
+    exit 1
+  fi
+fi
+
 case "$COMMAND" in
+  public-upgrade-verify)
+    [[ "${GDC_RELEASE_PROFILE:-}" == v2026.08.06 ]] || {
+      echo 'network upgrade verify requires --release v2026.08.06' >&2; exit 2;
+    }
+    run_phase "public-upgrade-verify-$1" "$ROOT/scripts/phase-public-upgrade-verify.sh" "$1"
+    ;;
+  host-upgrade-prepare|host-upgrade-watch)
+    [[ "${GDC_RELEASE_PROFILE:-}" == v2026.08.06 ]] || {
+      echo "$COMMAND requires --release v2026.08.06" >&2; exit 2;
+    }
+    use_node_data_home "$1"
+    if [[ "$COMMAND" == host-upgrade-prepare ]]; then
+      run_phase "host-upgrade-prepare-$1-$2" "$ROOT/scripts/phase-host-upgrade-prepare.sh" "$@"
+    else
+      run_phase "host-upgrade-watch-$1-$2" "$ROOT/scripts/phase-host-upgrade-watch.sh" "$@"
+    fi
+    ;;
+  public-network-verify)
+    [[ $# -eq 0 ]] || { usage; exit 2; }
+    run_phase public-network-verify "$ROOT/scripts/phase-public-network-verify.sh"
+    ;;
   prepare|verify|reset|baseline|settle|bootstrap-access|gateway-continuity|audit)
     use_network_owner_data_home
     [[ "$COMMAND" == reset || $# -eq 0 ]] || { usage; exit 2; }
@@ -290,6 +374,9 @@ case "$COMMAND" in
       [[ $# -ge 3 && $# -le 5 && "$2" == telegram && "$3" =~ ^(apply|status|verify)$ ]] || { usage; exit 2; }
       [[ "$3" == verify || $# -eq 3 ]] || { usage; exit 2; }
       run_phase "ops-consumer-telegram-$3" "$ROOT/scripts/phase-telegram-consumer.sh" "${@:3}"
+    elif [[ "$1" == observability ]]; then
+      [[ $# -eq 2 && "$2" == verify ]] || { usage; exit 2; }
+      run_phase ops-observability-verify "$ROOT/scripts/phase-observability-verify.sh"
     elif [[ "$1" == edge-node ]]; then
       [[ $# -eq 2 ]] || { usage; exit 2; }
       source "$ROOT/scripts/lib.sh"
@@ -367,9 +454,9 @@ case "$COMMAND" in
     done
     ;;
   governance)
-    use_network_owner_data_home
     governance_action="${1:-}"; shift || true
     if [[ "$governance_action" == devshard ]]; then
+      use_network_owner_data_home
       case "${1:-}" in
         '') run_phase governance-devshard "$ROOT/scripts/phase-governance-devshard.sh" ;;
         submit)
@@ -383,7 +470,12 @@ case "$COMMAND" in
         *) usage; exit 2 ;;
       esac
     elif [[ "$governance_action" == vote ]]; then
+      # A governance voter must retain its own GDC_HOME and keyring. Selecting
+      # the Genesis network-owner home here would silently aggregate voting
+      # authority into the proposal author's machine.
       [[ $# -eq 1 || $# -eq 2 ]] || { usage; exit 2; }
+      init_gdc_paths
+      load_project
       run_phase "vote-proposal-$1" "$ROOT/scripts/phase-vote-proposal.sh" "$@"
     else
       usage; exit 2

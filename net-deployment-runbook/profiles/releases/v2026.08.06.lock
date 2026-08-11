@@ -34,3 +34,7 @@ INFERENCED_UPGRADE_SHA256=91af67df9ef5c576a1695e5e85c8ee344f9f1a69d941bfc28fb339
 DAPI_UPGRADE_URL=https://github.com/gonka-ai/gonka/releases/download/release%2Fv0.2.15-post3/decentralized-api-amd64.zip
 DAPI_UPGRADE_SHA256=8cfa7345f5b7f968d5a1b765837b8319084c02d3dd2691b698c368774e20b55e
 BRIDGE_IMAGE=ghcr.io/product-science/bridge:0.2.15@sha256:ac01165eb8eb60dbafe5d1e060a11b474efb44146b12f308bef6153b55a2c22d
+# Preserve the public confirmation-PoC observation contract after upgrade.
+GDC_CPOC_PROBE_EPOCHS=4
+GDC_CPOC_PROBE_TIMEOUT_SECONDS=7200
+GDC_CPOC_PROBE_POLL_SECONDS=2

@@ -63,7 +63,7 @@ capture_chain_state() {
   ssh "$GENESIS_NODE" 'curl -fsS http://127.0.0.1:1317/productscience/inference/inference/current_epoch_group_data' >"$RUN/$prefix-epoch-group.json"
   printf '[]' >"$RUN/$prefix-balances.json"
   for node in "${nodes[@]}"; do
-    account="$ACCOUNTS/$node-cold.json"
+    account="$(node_account_file "$node")"
     address="$(jq -er .address "$account")"
     balance="$(ssh "$GENESIS_NODE" "curl -fsS http://127.0.0.1:1317/cosmos/bank/v1beta1/balances/$address")"
     jq --arg address "$address" --argjson balance "$balance" '. + [{address:$address,balance:$balance}]' \

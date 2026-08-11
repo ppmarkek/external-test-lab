@@ -145,8 +145,7 @@ else
   fi
   printf -- '- upgrade proposal #%s: %s; current height: %s; plan height: %s\n' "$proposal_id" "$(jq -r '.proposal.status' "$RUN/upgrade-proposal.json")" "$height" "$plan_height" >>"$RUN/report.md"
   if [[ "$height" -lt "$plan_height" ]]; then
-    systemctl --user is-active --quiet "gdc-upgrade-proposal-$proposal_id.service" || missing+=("active state-based upgrade worker")
-    printf -- '- upgrade: SCHEDULED; post-upgrade evidence required\n' >>"$RUN/report.md"
+    printf -- '- upgrade: SCHEDULED; each Host owner must prepare/watch independently; no central worker is permitted\n' >>"$RUN/report.md"
   else
     printf -- '- upgrade: activation reached; post-upgrade evidence required\n' >>"$RUN/report.md"
   fi

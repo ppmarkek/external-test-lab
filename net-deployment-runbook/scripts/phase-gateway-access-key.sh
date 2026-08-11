@@ -55,6 +55,15 @@ if [[ "$new_keys" != "$remote_keys" ]]; then
 fi
 
 if [[ "$action" == ensure ]]; then
+  # Do not continue to an inference probe merely because the write command
+  # returned successfully.  A stale or concurrently rewritten gateway.env
+  # would otherwise leave the dedicated credential absent and turn the probe
+  # into a misleading 401 failure.
+  remote_keys="$(read_remote_keys)"
+  case ",$remote_keys," in
+    *",$telegram_key,"*) ;;
+    *) die 'Telegram gateway credential was not persisted in DEVSHARD_API_KEYS' ;;
+  esac
   step 'Verify the dedicated Telegram credential with chain-accounted inference'
   "$ROOT/04-ops/test-inference-until-ready.sh" "https://$API_HOST" "$telegram_key" \
     "$GDC_HOME/runs/${GDC_RUN_ID:-gateway-access-key}/telegram-access" \

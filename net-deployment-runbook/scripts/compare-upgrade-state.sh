@@ -30,7 +30,7 @@ jq -n \
   --slurpfile after "$POST_PARTICIPANTS" '
   def active($doc):
     [$doc.participant[]
-     | select(.status == "ACTIVE" or .status == "PARTICIPANT_STATUS_ACTIVE" or .status == "1")
+     | select(.status == "ACTIVE" or .status == "PARTICIPANT_STATUS_ACTIVE" or .status == "1" or .status == 1)
      | {address,validator_key}]
     | sort_by(.address);
   (active($before[0])) as $b
@@ -57,7 +57,7 @@ jq -n \
     | from_entries;
   def models($doc): ($doc.epoch_group_data.sub_group_models // []);
   ([$participants[0].participant[]
-    | select(.status == "ACTIVE" or .status == "PARTICIPANT_STATUS_ACTIVE" or .status == "1")
+    | select(.status == "ACTIVE" or .status == "PARTICIPANT_STATUS_ACTIVE" or .status == "1" or .status == 1)
     | .address] | sort) as $expected
   | (weights($baseline[0])) as $b
   | (weights($after[0])) as $a

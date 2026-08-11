@@ -6,6 +6,11 @@ for contract in \
   './gdc.sh --release v2026.07.23 genesis <SSH_ALIAS> [--public-host <DNS>]' \
   './gdc.sh host join [--skip-qualification] [--public-host <DNS>] <SSH_ALIAS> [<GPU_SSH_ALIAS>]' \
   './gdc.sh --release v2026.07.23 network genesis <SSH_ALIAS>' \
+  'GDC_CHAIN_PUBLIC_BASE=https://node0.gonka-dev.net ./gdc.sh --release v2026.07.23 network verify' \
+  'GDC_CHAIN_PUBLIC_BASE=https://node0.gonka-dev.net GDC_UPGRADE_BASELINE_EVIDENCE_DIR=<baseline-bundle> ./gdc.sh --release v2026.08.06 network upgrade verify <proposal-id>' \
+  './gdc.sh --release v2026.08.06 upgrade propose' \
+  './gdc.sh --release v2026.08.06 host upgrade prepare <SSH_ALIAS> <proposal-id>' \
+  './gdc.sh --release v2026.08.06 host upgrade watch <SSH_ALIAS> <proposal-id>' \
   './gdc.sh --release v2026.07.23 gateway apply v3' \
   './gdc.sh --release v2026.08.06 governance devshard submit' \
   './gdc.sh --release v2026.08.06 bridge contract deploy sepolia' \
@@ -14,6 +19,15 @@ for contract in \
 done
 
 grep -Fq 'case "$COMMAND" in' "$ROOT/gdc.sh"
+grep -Fq "verify) COMMAND='public-network-verify'" "$ROOT/gdc.sh"
+grep -Fq 'phase-public-network-verify.sh' "$ROOT/gdc.sh"
+grep -Fq 'phase-public-upgrade-verify.sh' "$ROOT/gdc.sh"
+grep -Fq 'ops observability verify' "$ROOT/gdc.sh"
+grep -Fq 'phase-observability-verify.sh' "$ROOT/gdc.sh"
+grep -Fq "legacy command '\$COMMAND' is unsupported" "$ROOT/gdc.sh"
+! grep -Fq './gdc.sh --release v2026.08.06 upgrade-proposal' "$ROOT/gdc.sh"
+grep -Fq 'host-upgrade-prepare' "$ROOT/gdc.sh"
+grep -Fq 'host-upgrade-watch' "$ROOT/gdc.sh"
 grep -Fq 'prepare-join-role-config.sh' "$ROOT/gdc.sh"
 grep -Fq 'GDC_JOIN_SKIP_QUALIFICATION="$skip_qualification"' "$ROOT/gdc.sh"
 grep -Fq 'join_config_args+=(--public-host "$join_public_host")' "$ROOT/gdc.sh"
@@ -35,6 +49,7 @@ grep -Fq '"$verify_evidence" "$verify_evidence/completion.json"' "$ROOT/scripts/
 grep -Fq 'phase-bridge-observer.sh' "$ROOT/gdc.sh"
 grep -Fq 'GDC_GOVERNANCE_SUBMIT=true run_phase' "$ROOT/gdc.sh"
 grep -Fq 'GDC_GOVERNANCE_PROPOSAL_ID="$2" run_phase' "$ROOT/gdc.sh"
+grep -Fq 'A governance voter must retain its own GDC_HOME and keyring' "$ROOT/gdc.sh"
 if grep -Eq 'ha-v4|phase-ha-v4|DevShard v4 HA' "$ROOT/scripts/phase-bridge-observer.sh"; then
   echo 'bridge observer has an artificial DevShard HA prerequisite' >&2
   exit 1

@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+PHASE="$ROOT/scripts/phase-join-acceptance.sh"
+
+[[ -x "$PHASE" ]]
+grep -Fq 'GDC_JOIN_EFFECTIVE_EPOCHS' "$ROOT/profiles/releases/v2026.07.23.lock"
+grep -Fq 'GDC_JOIN_EFFECTIVE_TIMEOUT_SECONDS' "$ROOT/profiles/releases/v2026.07.23.lock"
+grep -Fq 'GENESIS_HASH=UNAVAILABLE' "$PHASE"
+grep -Fq 'deadline_epoch=0' "$PHASE"
+grep -Fq 'topology_contains_node "$NODE"' "$PHASE"
+! grep -Fq 'node_name "${1:-}"' "$PHASE"
+grep -Fq 'or .participant.status == 1' "$PHASE"
+grep -Fq 'record_join_state "$NODE" POC_ACCEPTED "$ADDRESS"' "$PHASE"
+grep -Fq 'record_join_state "$NODE" VALIDATOR_EFFECTIVE "$ADDRESS"' "$PHASE"
+grep -Fq 'record_join_state "$NODE" COMPLETE "$ADDRESS"' "$PHASE"
+grep -Fq 'operator_mode:$operator_mode' "$PHASE"
+grep -Fq 'GDC_JOIN_GATEWAY_CLIENT_KEY_FILE' "$PHASE"
+grep -Fq 'mode 0600' "$PHASE"
+grep -Fq '"$RUN/gateway-regression/completion.json" 180' "$PHASE"
+grep -Fq '.local_id == $runtime_id' "$PHASE"
+grep -Fq 'Host join: INCONCLUSIVE' "$PHASE"
+grep -Fq 'Host join: FAIL' "$PHASE"
+grep -Fq 'Host join: BLOCKED' "$PHASE"
+grep -Fq 'Host join: PASS' "$PHASE"
+grep -Fq 'cut -d, -f1 <"$KEY_FILE"' "$PHASE"
+grep -Fq 'check-validation-weight-evidence.sh' "$PHASE"
+grep -Fq 'validation-weight distribution is rejected' "$PHASE"
+grep -Fq 'poc_accepted_once=false' "$PHASE"
+grep -Fq 'poc-acceptance-observations.json' "$PHASE"
+grep -Fq 'positive accepted PoC weight in the bounded window' "$PHASE"
+grep -Fq 'epoch >= deadline_epoch' "$PHASE"
+grep -Fq 'phase-join-acceptance.sh' "$ROOT/scripts/phase-join.sh"
+! grep -Fq 'joined successfully' "$ROOT/scripts/phase-join.sh"
+
+echo 'PASS join acceptance state-machine contract'

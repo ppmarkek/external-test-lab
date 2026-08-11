@@ -77,7 +77,7 @@ if [[ "$EXPECT_RESET_STATE" == true ]]; then
 else
   curl -fsS "https://$SITE_HOST/status/participants" >"$OUT/participants.json"
 fi
-live_participant_count="$(jq -er '[.participant[] | select(.status == "ACTIVE" or .status == "PARTICIPANT_STATUS_ACTIVE" or .status == "1")] | length' "$OUT/participants.json")"
+live_participant_count="$(jq -er '[.participant[] | select(.status == "ACTIVE" or .status == "PARTICIPANT_STATUS_ACTIVE" or .status == "1" or .status == 1)] | length' "$OUT/participants.json")"
 if [[ "$EXPECT_RESET_STATE" != true ]]; then
   (( live_participant_count > 0 ))
 fi

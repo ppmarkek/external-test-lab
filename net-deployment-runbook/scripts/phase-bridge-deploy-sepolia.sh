@@ -8,6 +8,16 @@ mkdir -p "$RUN"
 install_evidence_exit_trap 'Sepolia bridge deployment'
 record_phase_profile bridge-deploy-sepolia
 
+blocked() {
+  cat >"$RUN/verdict.md" <<EOF
+# Sepolia bridge deployment: BLOCKED
+
+$1
+EOF
+  printf 'BLOCKED %s; evidence: %s\n' "$1" "$RUN" >&2
+  exit 3
+}
+
 contract_root="$ROOT/../../gonka/proposals/ethereum-bridge-contact"
 [[ -d "$contract_root" && -s "$contract_root/package-lock.json" ]] || die 'ethereum bridge checkout with package-lock.json is required'
 rpc_url="${GDC_SEPOLIA_RPC_URL:-${SEPOLIA_RPC_URL:-}}"
@@ -15,16 +25,14 @@ rpc_url="${GDC_SEPOLIA_RPC_URL:-${SEPOLIA_RPC_URL:-}}"
 
 private_key=''
 if [[ -n "${GDC_SEPOLIA_PRIVATE_KEY_FILE:-}" ]]; then
-  [[ -f "$GDC_SEPOLIA_PRIVATE_KEY_FILE" ]] || die 'GDC_SEPOLIA_PRIVATE_KEY_FILE does not exist'
+  [[ -f "$GDC_SEPOLIA_PRIVATE_KEY_FILE" ]] || blocked 'GDC_SEPOLIA_PRIVATE_KEY_FILE does not exist'
   mode="$(stat -c '%a' "$GDC_SEPOLIA_PRIVATE_KEY_FILE")"
-  [[ "$mode" == 600 || "$mode" == 400 ]] || die 'GDC_SEPOLIA_PRIVATE_KEY_FILE must have mode 0600 or 0400'
+  [[ "$mode" == 600 ]] || blocked 'GDC_SEPOLIA_PRIVATE_KEY_FILE must have mode 0600'
   private_key="$(<"$GDC_SEPOLIA_PRIVATE_KEY_FILE")"
-elif [[ -n "${GDC_SEPOLIA_PRIVATE_KEY:-}" ]]; then
-  private_key="$GDC_SEPOLIA_PRIVATE_KEY"
 else
-  die 'set GDC_SEPOLIA_PRIVATE_KEY_FILE (preferred) or GDC_SEPOLIA_PRIVATE_KEY in .env'
+  blocked 'set GDC_SEPOLIA_PRIVATE_KEY_FILE to a mode-0600 file; private keys are never read from .env or argv'
 fi
-[[ "$private_key" =~ ^0x[0-9a-fA-F]{64}$ ]] || die 'Sepolia private key must be a 32-byte 0x-prefixed hex value'
+[[ "$private_key" =~ ^0x[0-9a-fA-F]{64}$ ]] || blocked 'Sepolia private key file does not contain a 32-byte 0x-prefixed hex value'
 
 step 'Verify the Sepolia execution network before deployment'
 network_json="$RUN/sepolia-network.json"
@@ -35,6 +43,14 @@ jq -e '.result == "0xaa36a7"' "$network_json" >/dev/null || die 'execution RPC i
 step 'Capture current Gonka Genesis lineage and BLS epoch key'
 capture_canonical_genesis "https://$GENESIS_PUBLIC_HOST/chain-rpc/genesis" "$RUN/genesis.json" || die 'could not capture canonical Gonka Genesis'
 genesis_sha256_value="$(genesis_sha256 "$RUN/genesis.json")"
+post_upgrade_evidence="${GDC_POST_UPGRADE_EVIDENCE_DIR:-}"
+[[ -d "$post_upgrade_evidence" && -s "$post_upgrade_evidence/verdict.md" && -s "$post_upgrade_evidence/receipt.json" ]] \
+  || blocked 'GDC_POST_UPGRADE_EVIDENCE_DIR must name a public upgrade PASS bundle before bridge deployment'
+grep -qx '# Public upgrade verification: PASS' "$post_upgrade_evidence/verdict.md" \
+  || blocked 'bridge deployment is BLOCKED until the supplied post-upgrade public verification has PASSed'
+jq -e --arg genesis_sha256 "$genesis_sha256_value" '.verdict == "PASS" and .genesis_sha256 == $genesis_sha256' \
+  "$post_upgrade_evidence/receipt.json" >/dev/null \
+  || blocked 'post-upgrade public evidence belongs to another Genesis lineage'
 epoch_json="$RUN/current-epoch.json"
 group_json="$RUN/current-epoch-group.json"
 curl -fsS "https://$GENESIS_PUBLIC_HOST/chain-api/productscience/inference/inference/get_current_epoch" >"$epoch_json"
@@ -45,7 +61,19 @@ group_key_b64="$(jq -er '.epoch_data.group_public_key' "$group_json")"
 
 work="$(mktemp -d "$ROOT/.bridge-deploy.XXXXXX")"
 cleanup() { rm -rf "$work"; }
-trap cleanup EXIT
+bridge_deploy_exit() {
+  local rc=$?
+  cleanup
+  if (( rc != 0 )) && [[ ! -s "$RUN/verdict.md" ]]; then
+    cat >"$RUN/verdict.md" <<EOF
+# Sepolia bridge deployment: INCONCLUSIVE
+
+Deployment stopped with exit code $rc before a final verdict. Inspect the
+sanitized evidence bundle; no bridge readiness is implied.
+EOF
+  fi
+}
+trap bridge_deploy_exit EXIT
 cp -a "$contract_root"/. "$work"/
 umask 077
 printf '%s\n' "PRIVATE_KEY=$private_key" "SEPOLIA_RPC_URL=$rpc_url" "GONKA_CHAIN_ID=$CHAIN_ID" 'ETHEREUM_CHAIN_ID=11155111' "GENESIS_GROUP_PUBLIC_KEY=$group_key_b64" "GENESIS_HOST=$GENESIS_PUBLIC_HOST" >"$work/.env"

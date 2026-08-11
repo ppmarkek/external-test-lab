@@ -4,6 +4,9 @@ source "$(dirname "$0")/lib.sh"
 load_project
 assert_baseline_release
 record_phase_profile bootstrap-access
+RUN="$GDC_HOME/runs/${GDC_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-manual}/bootstrap-access"
+mkdir -p "$RUN"
+install_evidence_exit_trap 'Genesis bootstrap access'
 
 [[ -e "$STATE/joined/$GENESIS_NODE" ]] || die 'Genesis is not active; run ./gdc.sh --release v2026.07.23 genesis first'
 ssh_ready "$GENESIS_NODE" || die "$GENESIS_NODE is unreachable"
@@ -81,8 +84,24 @@ else
   GDC_ESCROW_ID="$active_escrow" "$ROOT/scripts/phase-ops.sh" gateway
 fi
 
-step 'Verify final authenticated inference access'
-"$ROOT/04-ops/test-inference.sh" "$GDC_GATEWAY_PUBLIC_URL" "$client_key" >/dev/null
-printf 'PASS bootstrap access: governed DevShard and active authenticated gateway\n'
+step 'Prove three authenticated, chain-accounted inference completions'
+for attempt in 1 2 3; do
+  "$ROOT/04-ops/test-inference.sh" "$GDC_GATEWAY_PUBLIC_URL" "$client_key" \
+    >"$RUN/authenticated-completion-$attempt.json"
+  jq -e '.choices[0].message.content | type == "string"' \
+    "$RUN/authenticated-completion-$attempt.json" >/dev/null
+done
+jq -n --arg chain_id "$CHAIN_ID" --arg gateway "$GDC_GATEWAY_PUBLIC_URL" \
+  --argjson completions 3 \
+  '{schema_version:1,verdict:"PASS",chain_id:$chain_id,gateway:$gateway,authenticated_completions:$completions}' \
+  >"$RUN/receipt.json"
+cat >"$RUN/verdict.md" <<EOF
+# Genesis bootstrap access: PASS
+
+The governed DevShard was active and three authenticated completions succeeded
+through the configured public gateway. Response evidence is retained in this
+bundle; credentials are not copied into it.
+EOF
+printf 'PASS bootstrap access: governed DevShard and three authenticated gateway completions\n'
 printf 'INFO OPS Telegram inference consumer is optional and is not a Genesis or Host-join prerequisite\n'
 printf 'READY run ./gdc.sh --release v2026.07.23 gateway-continuity after independent operators add eligible non-guardian model capacity\n'

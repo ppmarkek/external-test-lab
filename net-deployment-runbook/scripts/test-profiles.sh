@@ -117,7 +117,7 @@ grep -Fq 'header_up Host %s' "$ROOT/04-ops/render-ops.sh"
 grep -Fq 'json("/status/participants")' "$ROOT/04-ops/site/src/app.js"
 grep -Fq 'validatorMapController?.update(observedNodes)' "$ROOT/04-ops/site/src/app.js"
 grep -Fq 'AbortController' "$ROOT/04-ops/site/src/app.js"
-grep -Fq 'observedNodes.filter((node) => node.participantStatus === "ACTIVE")' "$ROOT/04-ops/site/src/app.js"
+grep -Fq 'validatorMapController?.update(' "$ROOT/04-ops/site/src/app.js"
 grep -Fq '__PUBLIC_GRAFANA_PROMETHEUS_URL__' "$ROOT/04-ops/edge-node/public-grafana/provisioning/datasources/prometheus.yml"
 grep -Fq 'PUBLIC_GRAFANA_PROMETHEUS_URL' "$ROOT/04-ops/edge-node/render-env.sh"
 grep -Fq 'PUBLIC_GRAFANA_PROMETHEUS_URL' "$ROOT/04-ops/edge-node/install-edge.sh"
@@ -169,7 +169,8 @@ for release in v2026.07.23 v2026.08.06; do
   [[ "$GONKA_COMMIT" =~ ^[0-9a-f]{40}$ ]]
   [[ "$GONKA_REPOSITORY" == https://github.com/gonka-ai/gonka.git ]]
   [[ "$GONKA_SOURCE_REF" == "release/v$GONKA_RELEASE" ]]
-  [[ "$GENESIS_EPOCH_LENGTH" == 50 && "$GENESIS_EPOCH_SHIFT" == 0 ]]
+  [[ "$GENESIS_EPOCH_LENGTH" == 90 && "$GENESIS_EPOCH_SHIFT" == 0 ]]
+  [[ "$GENESIS_POC_STAGE_DURATION" == 20 && "$GENESIS_POC_EXCHANGE_DURATION" == 10 ]]
   [[ "$MLNODE_BLACKWELL_IMAGE" == "$MLNODE_GENERIC_IMAGE" ]] || {
     echo 'Blackwell image must use the verified generic upstream runtime' >&2
     exit 1
@@ -232,13 +233,14 @@ GDC_RELEASE_PROFILE=v2026.07.23 GDC_MODEL_PROFILE=qwen3-0.6b load_profiles
 for profile in a5000-24g t4-16g 4090-24g 3090-24g blackwell-16g; do
   out="$(mktemp)"
   trap 'rm -f "${out:-}"' EXIT
-  "$ROOT/02-node/render-node-config.sh" --node-name validator-b --node-index 1 --profile "$profile" --output "$out" >/dev/null
+  "$ROOT/02-node/render-node-config.sh" --node-name validator-b --runtime-id qwen3-0.6b:gonka1validatorbvalidatorbvalidatorbvalidatorb --profile "$profile" --output "$out" >/dev/null
   jq -e --arg model "$MODEL_ID" --arg revision "$MODEL_REVISION" '
     .[0].max_concurrent == 64
     and (.[0].models[$model].args | index("--dtype") != null)
     and (.[0].models[$model].args | index($revision) != null)
     and (.[0].models[$model].args | index("2048") != null)
   ' "$out" >/dev/null
+  jq -e '. [0].id == "qwen3-0.6b:gonka1validatorbvalidatorbvalidatorbvalidatorb"' "$out" >/dev/null
   rm -f "$out"
   unset out
 done
@@ -258,14 +260,18 @@ jq -e --arg model "$MODEL_ID" --arg revision "$MODEL_REVISION" --arg guardian go
   and .app_state.inference.params.devshard_escrow_params.approved_versions == []
   and .app_state.inference.params.devshard_escrow_params.allowed_creator_addresses == []
   and .app_state.inference.params.poc_params.models[0].model_id == $model
-  and .app_state.inference.params.epoch_params.epoch_length == "50"
+  and .app_state.inference.params.epoch_params.epoch_length == "90"
   and .app_state.inference.params.epoch_params.epoch_shift == "0"
-  and .app_state.inference.params.epoch_params.poc_stage_duration == "4"
-  and .app_state.inference.params.epoch_params.poc_exchange_duration == "8"
+  and .app_state.inference.params.epoch_params.poc_stage_duration == "20"
+  and .app_state.inference.params.epoch_params.poc_exchange_duration == "10"
   and .app_state.inference.params.epoch_params.poc_validation_delay == "10"
   and .app_state.inference.params.epoch_params.poc_validation_duration == "4"
   and .app_state.inference.params.epoch_params.poc_slot_allocation == {"value":"5","exponent":-1}
   and .app_state.inference.params.poc_params.validation_slots == 2
+  and .app_state.inference.params.poc_params.confirmation_poc_v2_enabled == true
+  and .app_state.inference.params.confirmation_poc_params.expected_confirmations_per_epoch == "1"
+  and .app_state.inference.params.confirmation_poc_params.slash_fraction == {"value":"0","exponent":0}
+  and .app_state.inference.params.confirmation_poc_params.upgrade_protection_window == "20"
   and .app_state.inference.params.genesis_guardian_params.guardian_addresses == [$guardian]
   and .app_state.inference.params.genesis_guardian_params.network_maturity_threshold == "2000000"
   and .app_state.inference.genesis_only_params.genesis_guardian_enabled == true
@@ -281,6 +287,8 @@ fi
 grep -Fq 'GDC_STOP_POC_AT_WINDDOWN' "$ROOT/02-node/render-node-env.sh"
 grep -Fq 'GDC_GENESIS_GUARDIAN_ENABLED' "$ROOT/01-identities-genesis/render-genesis-overrides.sh"
 grep -Fq 'single-node bootstrap requires GDC_GENESIS_GUARDIAN_ENABLED=true' "$ROOT/scripts/phase-bootstrap-access.sh"
+grep -Fq 'authenticated-completion-$attempt.json' "$ROOT/scripts/phase-bootstrap-access.sh"
+grep -Fq 'authenticated_completions:$completions' "$ROOT/scripts/phase-bootstrap-access.sh"
 grep -Fq 'Create scoped operator secrets for $NODE' "$ROOT/scripts/phase-join.sh"
 grep -Fq 'wait-hardware-node.sh' "$ROOT/scripts/phase-ml-attach.sh"
 grep -Fq 'Record the explicit Network Node to external GPU association' "$ROOT/scripts/phase-ml-attach.sh"
@@ -295,6 +303,11 @@ fi
 grep -Fq 'PoCGenerateWindDown' "$ROOT/02-node/poc-winddown-watch.sh"
 grep -Fq 'GDC_POC_WINDDOWN_API_URL' "$ROOT/02-node/poc-winddown-watch.sh"
 grep -Fq 'http://127.0.0.1:9000' "$ROOT/02-node/poc-winddown-watch.sh"
+grep -Fq 'Restart $NODE API and colocated MLNode only after synchronization' "$ROOT/scripts/phase-join.sh"
+grep -Fq 'Restart the Genesis API and colocated MLNode only after synchronization' "$ROOT/scripts/phase-genesis.sh"
+grep -Fq 'compose_files+=(-f compose.ml-local.yaml)' "$ROOT/03-join/restart-api-after-sync.sh"
+grep -Fq 'services+=(mlnode)' "$ROOT/03-join/restart-api-after-sync.sh"
+grep -Fq 'READY post-sync services restarted' "$ROOT/03-join/restart-api-after-sync.sh"
 if grep -Fq '"${PUBLIC_URL}/api/v1/epochs/latest"' "$ROOT/02-node/poc-winddown-watch.sh"; then
   echo 'PoC wind-down watcher must not poll the rate-limited public API' >&2
   exit 1
@@ -304,7 +317,9 @@ grep -Fq 'gdc-poc-winddown-watch@' "$ROOT/02-node/install-node.sh"
 grep -Fq 'gdc-poc-winddown-watch@' "$ROOT/02-node/ml-only/install-ml.sh"
 grep -Fq 'require_current_baseline_pass' "$ROOT/scripts/phase-propose-upgrade.sh"
 grep -Fq 'require_current_baseline_pass' "$ROOT/scripts/phase-upgrade.sh"
-grep -Fq 'require_current_baseline_pass' "$ROOT/scripts/phase-upgrade-worker.sh"
+grep -Fq 'Centralized upgrade worker: BLOCKED' "$ROOT/scripts/phase-upgrade-worker.sh"
+grep -Fq 'centralized upgrade worker is retired' "$ROOT/scripts/phase-upgrade-worker.sh"
+! grep -Fq 'systemd-run' "$ROOT/scripts/phase-upgrade-worker.sh"
 grep -Fq '# DevNet verification: PASS' "$ROOT/scripts/lib.sh"
 grep -Fq 'GDC_NODE_ALIASES' "$ROOT/scripts/lib.sh"
 if (
@@ -326,7 +341,24 @@ fi
   GENESIS_NODE=gdc-node0
   node_name gdc-node2
 })" == gdc-node2 ]]
-grep -Fq 'ACTIVE chain participants differ from joined state' "$ROOT/scripts/phase-verify.sh"
+grep -Fq 'configured participant state does not match the live ACTIVE set' "$ROOT/scripts/phase-verify.sh"
+grep -Fq 'chain-recorded model runtime' "$ROOT/scripts/phase-verify.sh"
+grep -Fq '.local_id == $runtime_id' "$ROOT/scripts/phase-verify.sh"
+grep -Fq 'confirmation-PoC fast-profile contract' "$ROOT/scripts/phase-verify.sh"
+grep -Fq '# DevNet verification: BLOCKED' "$ROOT/scripts/phase-verify.sh"
+grep -Fq 'effective live consensus validators' "$ROOT/scripts/phase-verify.sh"
+grep -Fq 'ACTIVE but not an effective consensus validator' "$ROOT/scripts/phase-verify.sh"
+grep -Fq 'record_run_manifest' "$ROOT/scripts/lib.sh"
+grep -Fq 'bind_run_manifest_genesis' "$ROOT/scripts/lib.sh"
+grep -Fq 'runs/${GDC_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-manual}/verify' "$ROOT/scripts/phase-verify.sh"
+grep -Fq 'record_join_state "$NODE" ACTIVE "$ADDRESS"' "$ROOT/scripts/phase-join.sh"
+! grep -Fq 'joined successfully' "$ROOT/scripts/phase-join.sh"
+grep -Fq 'phase-join-acceptance.sh' "$ROOT/scripts/phase-join.sh"
+grep -Fq 'runtime_id_for_participant' "$ROOT/scripts/lib.sh"
+grep -Fq 'record_runtime_identity' "$ROOT/scripts/lib.sh"
+grep -Fq 'GDC_UPGRADE_MIN_LEAD_BLOCKS:-60' "$ROOT/scripts/phase-propose-upgrade.sh"
+grep -Fq -- '--runtime-id "$RUNTIME_ID"' "$ROOT/scripts/phase-join.sh"
+! grep -Fq -- '--node-index' "$ROOT/scripts/phase-join.sh"
 grep -Fq 'trap on_exit EXIT' "$ROOT/scripts/phase-verify.sh"
 for evidence_phase in phase-settle.sh phase-ha-v4.sh phase-bridge-observer.sh phase-governance-devshard.sh phase-propose-upgrade.sh phase-vote-proposal.sh phase-audit-lifecycle.sh; do
   grep -Fq 'install_evidence_exit_trap' "$ROOT/scripts/$evidence_phase"
@@ -367,6 +399,11 @@ grep -Fq 'devshard_version=' "$ROOT/scripts/phase-settle.sh"
 grep -Fq "grep -qx 'devshard_version=v4'" "$ROOT/scripts/phase-ha-v4.sh"
 grep -Fq 'base-inputs-before.sha256' "$ROOT/scripts/phase-ha-v4.sh"
 grep -Fq 'settlement_bundle=' "$ROOT/scripts/phase-ha-v4.sh"
+grep -Fq 'docker compose logs --no-color --tail=200 versiond' "$ROOT/scripts/phase-settle.sh"
+if grep -Eq 'docker compose logs.*versiond api|versiond-and-api\.log' "$ROOT/scripts/phase-settle.sh"; then
+  echo 'Settlement evidence must not copy raw DAPI logs' >&2
+  exit 1
+fi
 grep -Fq 'genesis_sha256=%s' "$ROOT/scripts/phase-bridge-observer.sh"
 if grep -Eq 'ha-v4|HA evidence|devshard_version=v4' "$ROOT/scripts/phase-bridge-observer.sh"; then
   echo 'Bridge observer must not depend on DevShard HA' >&2
