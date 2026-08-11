@@ -23,11 +23,11 @@ BOT_HOST="$TELEGRAM_BOT_HOST"
 if [[ "$CALLER_API_BASE_URL_SET" == true ]]; then
   BOT_API_BASE_URL="$CALLER_API_BASE_URL"
 else
-  # The bot must use the same current-lineage public edge as authenticated
-  # gateway verification.  A historical generic api.gonka-dev.net name can
-  # point elsewhere (or return a proxy 502), while PUBLIC_EDGE_HOST is bound
-  # to this Genesis role input. Operators can still explicitly override it.
-  BOT_API_BASE_URL="https://${PUBLIC_EDGE_HOST}/v1"
+  # The bot talks to the gateway API origin, not a participant's public edge:
+  # the latter proxies DAPI on port 8000. API_HOST is resolved from the
+  # current role topology and is also the default used by gateway verification.
+  # Operators can still explicitly override it for an authorized API origin.
+  BOT_API_BASE_URL="https://${API_HOST}/v1"
 fi
 BOT_STATE_DB=/data/bot.sqlite3
 BOT_METRICS_FILE=/metrics/telegram-bot.prom
