@@ -18,6 +18,11 @@ if grep -Fq 'ENV_FILE="${GDC_ENV:-$GDC_HOME/.env}"' "$deploy"; then
   echo 'Telegram deployment must resolve the OPS role input through load_project before requiring an environment file' >&2
   exit 1
 fi
+grep -Fq 'BOT_API_BASE_URL="https://${PUBLIC_EDGE_HOST}/v1"' "$deploy"
+if grep -Fq 'https://api.gonka-dev.net/v1' "$deploy"; then
+  echo 'Telegram deployment must not use a generic API host instead of the current-lineage public edge' >&2
+  exit 1
+fi
 grep -Fq 'GATEWAY_API_KEY=$BOT_GATEWAY_API_KEY' "$deploy"
 grep -Fq 'INTERNAL_API_TOKEN=$BOT_INTERNAL_API_TOKEN' "$deploy"
 grep -Fq 'Telegram conversation consumer is not yet ready' "$deploy"
