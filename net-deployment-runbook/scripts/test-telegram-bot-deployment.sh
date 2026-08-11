@@ -13,6 +13,11 @@ grep -Fq 'docker compose up -d --build --force-recreate' "$deploy"
 grep -Fq 'grep -qx gonka-devnet-bot-bot-1' "$deploy"
 grep -Fq 'BOT_KEY_FILE="$SECRETS/gateway.telegram-client-key"' "$deploy"
 grep -Fq 'BOT_INTERNAL_TOKEN_FILE="$SECRETS/telegram.conversation-api-token"' "$deploy"
+grep -Fq 'Resolve the OPS role input before requiring it' "$deploy"
+if grep -Fq 'ENV_FILE="${GDC_ENV:-$GDC_HOME/.env}"' "$deploy"; then
+  echo 'Telegram deployment must resolve the OPS role input through load_project before requiring an environment file' >&2
+  exit 1
+fi
 grep -Fq 'GATEWAY_API_KEY=$BOT_GATEWAY_API_KEY' "$deploy"
 grep -Fq 'INTERNAL_API_TOKEN=$BOT_INTERNAL_API_TOKEN' "$deploy"
 grep -Fq 'Telegram conversation consumer is not yet ready' "$deploy"

@@ -7,12 +7,15 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT/scripts/lib.sh"
 BOT_SOURCE="$ROOT/scripts/telegram-bot"
 BOT_DIR=/srv/dai/gonka-devnet-bot
-ENV_FILE="${GDC_ENV:-$GDC_HOME/.env}"
 CALLER_API_BASE_URL="${GDC_TELEGRAM_BOT_API_BASE_URL:-}"
 CALLER_API_BASE_URL_SET=false
 [[ ${GDC_TELEGRAM_BOT_API_BASE_URL+x} ]] && CALLER_API_BASE_URL_SET=true
-[[ -s "$ENV_FILE" ]] || { echo "missing environment file: $ENV_FILE" >&2; exit 1; }
+# Resolve the OPS role input before requiring it.  `load_project` deliberately
+# falls back from a Host-scoped GDC_HOME to GDC_DATA_ROOT/.env, so an OPS
+# command can run after a split-role join without copying administrator input
+# into the Host home.
 load_project
+[[ -s "$ENV_FILE" ]] || { echo "missing environment file: $ENV_FILE" >&2; exit 1; }
 BOT_HOST="$TELEGRAM_BOT_HOST"
 [[ -n "${TELEGRAM_BOT_TOKEN:-}" && "$TELEGRAM_BOT_TOKEN" != replace-with-BotFather-token ]] || {
   echo "TELEGRAM_BOT_TOKEN must be configured in $ENV_FILE" >&2; exit 1;
