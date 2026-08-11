@@ -15,5 +15,8 @@ grep -Fq 'verify-public-grafana.sh' "$PHASE"
 grep -Fq 'OPS observability verification: PASS' "$PHASE"
 grep -Fq 'effective_validators' "$PHASE"
 grep -Fq '.result.validators as $validators' "$PHASE"
+grep -Fq '/api/ds/query' "$ROOT/scripts/verify-public-grafana.sh"
+grep -Fq 'from:"now-15m"' "$ROOT/scripts/verify-public-grafana.sh"
+grep -Fq 'range query returned no data or an error' "$ROOT/scripts/verify-public-grafana.sh"
 
 echo 'PASS observability verification contract'

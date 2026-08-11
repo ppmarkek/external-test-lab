@@ -60,7 +60,11 @@ const zeroCapacity = {
   devshards: [{ ...activeShard, chain_phase: 'PoCValidate', block_reason: 'poc' }],
 };
 assert.equal(state.classify(zeroCapacity, 1, failedProbe, now).state, 'UNAVAILABLE');
-assert.equal(state.classify(zeroCapacity, 1, readyProbe, now).state, 'AVAILABLE');
+assert.deepEqual(state.classify(zeroCapacity, 1, readyProbe, now), {
+  state: 'UNAVAILABLE',
+  available: false,
+  message: 'Gateway unavailable – no current eligible inference capacity',
+});
 
 const liveCapacity = {
   ...zeroCapacity,

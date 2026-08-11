@@ -34,11 +34,14 @@ fi
 
 if [[ "$state" == UNAVAILABLE && "$reason" == credentials_unavailable && -s "$gateway_env" ]]; then
   # Readiness uses the gateway-owned assurance credential. Consumer services
-  # such as Telegram must not control or mask the gateway state.
+  # such as Telegram must not control or mask the gateway state. A static
+  # prompt can be served from cache after all current runtime capacity is
+  # gone, so every probe must force an uncached completion.
   client_key="$(awk -F= '$1 == "DEVSHARD_API_KEYS" {print $2; exit}' "$gateway_env" | cut -d, -f1)"
   model="$(awk -F= '$1 == "DEVSHARD_MODEL" {print substr($0, index($0, "=") + 1); exit}' "$gateway_env")"
   if [[ -n "$client_key" && -n "$model" ]]; then
-    payload="$(jq -cn --arg model "$model" '{model:$model,messages:[{role:"user",content:"Reply with OK"}],max_tokens:8}')"
+    probe_nonce="$(date +%s%N)-$$-${RANDOM}"
+    payload="$(jq -cn --arg model "$model" --arg nonce "$probe_nonce" '{model:$model,messages:[{role:"user",content:("GDC readiness probe " + $nonce)}],max_tokens:8}')"
     set +e
     http_code="$(curl -sS --connect-timeout 3 --max-time 20 -o "$response" -w '%{http_code}' \
       "$gateway_url/v1/chat/completions" \

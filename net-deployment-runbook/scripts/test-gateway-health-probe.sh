@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ! grep -Eq 'gateway-key-pool|GDC_GATEWAY_PUBLIC_KEY_POOL_FILE|Telegram' "$ROOT/04-ops/gateway-health-probe.sh"
+! grep -Fq 'Reply with OK' "$ROOT/04-ops/gateway-health-probe.sh"
 tmp="$(mktemp -d)"
 server_pid=''
 trap '[[ -z "$server_pid" ]] || kill "$server_pid" 2>/dev/null || true; rm -rf "$tmp"' EXIT
@@ -20,8 +21,12 @@ node -e '
     request.on("end",()=>{
       let payload={};try{payload=JSON.parse(body)}catch{}
       const valid=request.headers.authorization==="Bearer test-secret" && payload.model==="Qwen/Qwen3-0.6B";
-      response.writeHead(valid?200:401,{"content-type":"application/json"});
-      response.end(valid?JSON.stringify({choices:[{message:{content:"OK"}}]}):JSON.stringify({error:"unauthorized"}));
+      const content=payload.messages?.[0]?.content || "";
+      const liveProbe=/^GDC readiness probe [0-9]+-[0-9]+-[0-9]+$/.test(content);
+      const cachedOnly=content==="Reply with OK";
+      const succeeds=valid && (request.url.startsWith("/cached/") ? cachedOnly : liveProbe);
+      response.writeHead(succeeds?200:(valid?429:401),{"content-type":"application/json"});
+      response.end(succeeds?JSON.stringify({choices:[{message:{content:"OK"}}]}):JSON.stringify({error:"runtime unavailable"}));
     });
   }).listen(Number(process.argv[1]),"127.0.0.1");
 ' "$port" &
@@ -36,6 +41,14 @@ GDC_GATEWAY_HEALTH_FILE="$tmp/ready.json" \
 GDC_GATEWAY_HEALTH_URL="http://127.0.0.1:$port" \
   "$ROOT/04-ops/gateway-health-probe.sh"
 jq -e '.state == "READY" and .http_status == 200 and .reason == "completion_succeeded" and (.latency_ms >= 0)' "$tmp/ready.json" >/dev/null
+
+# A cache-only endpoint serves the former constant prompt but rejects a real
+# inference request. The readiness probe must report it unavailable.
+GDC_GATEWAY_ENV="$tmp/gateway.env" \
+GDC_GATEWAY_HEALTH_FILE="$tmp/cached-only.json" \
+GDC_GATEWAY_HEALTH_URL="http://127.0.0.1:$port/cached" \
+  "$ROOT/04-ops/gateway-health-probe.sh"
+jq -e '.state == "UNAVAILABLE" and .http_status == 429 and .reason == "http_429"' "$tmp/cached-only.json" >/dev/null
 
 GDC_GATEWAY_ENV="$tmp/gateway.env" \
 GDC_GATEWAY_HEALTH_FILE="$tmp/unavailable.json" \
@@ -57,6 +70,6 @@ jq -e '
   and .recovery.started_at == "2026-08-10T08:00:00Z"
   and .recovery.next_check_seconds == 15
 ' "$tmp/recovering.json" >/dev/null
-! grep -Eq 'test-secret|Qwen/Qwen3-0.6B|choices|content' "$tmp/ready.json" "$tmp/unavailable.json"
+! grep -Eq 'test-secret|Qwen/Qwen3-0.6B|choices|content' "$tmp/ready.json" "$tmp/cached-only.json" "$tmp/unavailable.json"
 
 printf 'PASS gateway synthetic health probe contract\n'

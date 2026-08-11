@@ -20,33 +20,48 @@ for dashboard in gdc-network gdc-inference; do
   jq -e --arg dashboard "$dashboard" '.dashboard.uid == $dashboard and ([.dashboard.panels[]? | select(.targets? != null)] | length >= 20) and ([.dashboard.panels[]?.targets[]?.expr | select(type == "string" and length > 0)] | length >= 20)' "$RUN/$dashboard.json" >/dev/null || die "public Grafana dashboard $dashboard is incomplete"
 done
 jq -r '.dashboard.panels[]?.targets[]?.expr | select(type == "string" and length > 0)' "$RUN/gdc-network.json" "$RUN/gdc-inference.json" | sort -u >"$RUN/panel-expressions.txt"
-while IFS= read -r expression; do printf '%s' "$expression" | base64 -w0; printf '\n'; done <"$RUN/panel-expressions.txt" >"$RUN/panel-expressions.b64"
 panel_deadline=$((SECONDS + 180))
 panel_data_ready=false
 missing_expression=''
 while (( SECONDS < panel_deadline )); do
-  ssh -T "$GATEWAY_NODE" 'while IFS= read -r encoded; do
-    query="$(printf %s "$encoded" | base64 -d)"
-    result="$(curl -fsSG --data-urlencode query="$query" http://127.0.0.1:9099/api/v1/query)"
-    printf "%s\t%s\n" "$encoded" "$(printf %s "$result" | base64 -w0)"
-  done' <"$RUN/panel-expressions.b64" >"$RUN/panel-results.b64"
+  : >"$RUN/panel-results.jsonl"
   missing_expression=''
-  while IFS=$'\t' read -r encoded result_encoded; do
-    expression="$(printf '%s' "$encoded" | base64 -d)"
-    result="$(printf '%s' "$result_encoded" | base64 -d)"
-    if ! jq -e '.status == "success" and (.data.result | length > 0)' <<<"$result" >/dev/null; then
+  while IFS= read -r expression; do
+    payload="$(jq -cn --arg expression "$expression" '{
+      from:"now-15m",
+      to:"now",
+      queries:[{
+        refId:"A",
+        expr:$expression,
+        interval:"15s",
+        intervalMs:15000,
+        maxDataPoints:1000,
+        datasource:{uid:"prometheus",type:"prometheus"}
+      }]
+    }')"
+    response="$(curl -sS --connect-timeout 5 --max-time 20 -w $'\n%{http_code}' \
+      -X POST "https://$GRAFANA_HOST/api/ds/query" \
+      -H 'Content-Type: application/json' --data "$payload")"
+    http_code="${response##*$'\n'}"
+    result="${response%$'\n'*}"
+    jq -cn --arg expression "$expression" --arg http_code "$http_code" --argjson result "$result" \
+      '{expression:$expression,http_code:($http_code|tonumber),result:$result}' >>"$RUN/panel-results.jsonl"
+    if [[ "$http_code" != 200 ]] || ! jq -e '
+      (.results.A.error? | not)
+      and ([.results.A.frames[]?.data.values[]? | length] | any(. > 0))
+    ' <<<"$result" >/dev/null; then
       missing_expression="$expression"
       break
     fi
-  done <"$RUN/panel-results.b64"
+  done <"$RUN/panel-expressions.txt"
   if [[ -z "$missing_expression" ]]; then
     panel_data_ready=true
     break
   fi
-  printf 'WAIT  public Grafana panel data after datasource restart: %s\n' "$missing_expression"
+  printf 'WAIT  public Grafana range query after datasource restart: %s\n' "$missing_expression"
   sleep 3
 done
-[[ "$panel_data_ready" == true ]] || die "public Grafana panel expression returned no Prometheus data: $missing_expression"
+[[ "$panel_data_ready" == true ]] || die "public Grafana panel range query returned no data or an error: $missing_expression"
 
 command -v google-chrome >/dev/null || die 'google-chrome is required to validate public Grafana rendering'
 google-chrome --headless=new --no-sandbox --disable-gpu --virtual-time-budget=12000 --window-size=1440,1000 --dump-dom "$NETWORK_URL" >"$RUN/gdc-network-dom.html" 2>"$RUN/gdc-network-chrome.stderr"
