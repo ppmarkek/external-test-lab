@@ -210,12 +210,31 @@ def health_payload(db: sqlite3.Connection) -> dict:
     last_success = db.execute(
         "SELECT max(created_at) FROM inference_events WHERE outcome = 'success'"
     ).fetchone()[0] or 0
+    last_event = db.execute(
+        "SELECT outcome, created_at FROM inference_events ORDER BY id DESC LIMIT 1"
+    ).fetchone()
     age = max(0, now() - last_success) if last_success else None
+    ready = age is not None and age <= HEALTH_MAX_AGE_SECONDS
+    if ready:
+        failure_reason = None
+    elif last_event and last_event["outcome"] != "success":
+        # `outcome` is a bounded internal class such as http_429 or
+        # transport_error, never a gateway body, credential, user input or
+        # Telegram identifier. It makes an unavailable bot actionable without
+        # leaking the request that triggered it.
+        failure_reason = last_event["outcome"]
+    elif last_success:
+        failure_reason = "last_success_stale"
+    else:
+        failure_reason = "no_successful_inference"
     return {
         "status": "ok",
-        "inference_ready": age is not None and age <= HEALTH_MAX_AGE_SECONDS,
+        "inference_ready": ready,
         "last_success_timestamp": last_success or None,
         "last_success_age_seconds": age,
+        "last_inference_outcome": last_event["outcome"] if last_event else None,
+        "last_inference_timestamp": last_event["created_at"] if last_event else None,
+        "inference_failure_reason": failure_reason,
     }
 
 

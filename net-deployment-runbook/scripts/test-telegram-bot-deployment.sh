@@ -30,7 +30,30 @@ grep -Fq 'python3 /app/bot.py --probe' "$deploy"
 grep -Fq 'HEALTH_MAX_AGE_SECONDS=' "$deploy"
 grep -Fq 'PROBE_MAX_OUTPUT_TOKENS=8' "$deploy"
 grep -Fq 'max_output_tokens' "$ROOT/scripts/telegram-bot/bot.py"
+grep -Fq 'inference_failure_reason' "$ROOT/scripts/telegram-bot/bot.py"
 ! grep -Eq 'gateway-key-pool|POOL_SOURCE|key issuer' "$deploy"
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+TELEGRAM_BOT_TOKEN=fixture-telegram-token \
+GATEWAY_API_KEY=fixture-gateway-key \
+INTERNAL_API_TOKEN=fixture-internal-token \
+STATE_DB="$tmp/bot.sqlite3" \
+METRICS_FILE="$tmp/telegram-bot.prom" \
+python3 - "$ROOT/scripts/telegram-bot/bot.py" <<'PY'
+import importlib.util
+import sys
+
+spec = importlib.util.spec_from_file_location("telegram_bot_fixture", sys.argv[1])
+bot = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(bot)
+with bot.connection() as db:
+    bot.record_inference(db, "http_429")
+    health = bot.health_payload(db)
+assert health["inference_ready"] is False
+assert health["last_inference_outcome"] == "http_429"
+assert health["inference_failure_reason"] == "http_429"
+PY
 
 grep -Fq '@telegram_consumer path /status/telegram-consumer' "$ROOT/04-ops/edge-node/PublicCaddyfile"
 grep -Fq '@telegram_metrics_from_monitoring' "$ROOT/04-ops/edge-node/PublicCaddyfile"
