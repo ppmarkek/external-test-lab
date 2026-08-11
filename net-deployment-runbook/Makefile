@@ -2,9 +2,13 @@ SHELLCHECK_VERSION ?= v0.11.0
 SHELLCHECK_IMAGE := koalaman/shellcheck:$(SHELLCHECK_VERSION)
 SHELL_SCRIPTS := $(shell find . -type f -name '*.sh' -not -path './vendor/*' -print | LC_ALL=C sort)
 DEVCONTAINER_CLI ?= npx --yes --loglevel=silent @devcontainers/cli
+BATS ?= bats
+BATS_DOCKER_IMAGE ?= gdc-runbook-bats:local
+BATS_DIND_IMAGE ?= gdc-runbook-bats-dind:local
+KCOV ?= kcov
 cmd ?= bash
 
-.PHONY: cleanroom cleanroom-fresh cleanroom-reset shellcheck site-js site-js-check test verify-upstream-profiles install-git-hooks
+.PHONY: bats bats-coverage bats-docker bats-dind cleanroom cleanroom-fresh cleanroom-reset shellcheck site-js site-js-check test verify-upstream-profiles install-git-hooks
 
 cleanroom: cleanroom-reset
 	@$(DEVCONTAINER_CLI) exec --workspace-folder . $(cmd)
@@ -63,6 +67,7 @@ test:
 	@./scripts/test-upgrade-state-comparison.sh
 	@./scripts/test-upgrade-proposal-binding.sh
 	@./scripts/test-gateway-continuity-verdict.sh
+	@./scripts/test-gateway-telemetry-overlay.sh
 	@node ./scripts/test-gateway-site-state.js
 	@node ./scripts/test-software-versions.js
 	@./scripts/test-gateway-health-probe.sh
@@ -77,3 +82,29 @@ test:
 	@./scripts/test-domain-cli.sh
 	@./scripts/test-explicit-public-host.sh
 	@./scripts/test-cleanroom-contract.sh
+
+# Bats is deliberately test-only. Deployment scripts neither install nor invoke
+# it; CI can opt in with `make bats BATS=/path/to/bats`.
+bats:
+	@$(BATS) test
+
+# The image is a disposable simulated Host: no GPU, remote SSH host, or Docker
+# daemon is required. Host-side docker/ssh calls are narrowly mocked and the
+# local chain status endpoint is served by a test fixture.
+bats-docker:
+	@docker build --file test/Dockerfile --tag $(BATS_DOCKER_IMAGE) .
+	@docker run --rm --user root -e GDC_BATS_CONTAINER=true $(BATS_DOCKER_IMAGE) test
+
+# The integration tier starts an inner daemon in a privileged disposable
+# container. The runbook's real `docker compose` calls operate on that daemon;
+# only GPU inference and CometBFT are replaced with local fixtures.
+bats-dind:
+	@docker build --file test/Dockerfile.dind --tag $(BATS_DIND_IMAGE) .
+	@docker run --rm --privileged -e GDC_BATS_CONTAINER=true -e GDC_BATS_DIND=true $(BATS_DIND_IMAGE) test
+
+# kcov is optional and kept out of the normal test/CI path. It reports coverage
+# for the Bats process and can guide a later shell-script refactor.
+bats-coverage:
+	@command -v "$(KCOV)" >/dev/null || { echo 'kcov is required; install it or set KCOV=/path/to/kcov' >&2; exit 2; }
+	@rm -rf coverage/bats
+	@$(KCOV) --include-pattern="$(CURDIR)" coverage/bats $(BATS) test

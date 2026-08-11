@@ -39,6 +39,32 @@ MLNode enough time to return an artifact and still reserves a complete
 confirmation-PoC lifecycle.  Genesis rendering rejects timing combinations
 that cannot fit that lifecycle.
 
+## Bats contract tests
+
+`test/` is an optional, test-only Bats suite for shell behavior that is
+hard to express with the existing one-purpose contract scripts. It does not
+ship with or run during deployment:
+
+```bash
+make bats BATS=/path/to/bats
+```
+
+`make bats-docker` runs the same suite in a disposable host-like container.
+It does not require a GPU, SSH target or Docker daemon inside the container:
+the host-side Compose calls are narrow mocks and a local HTTP mock-server
+supplies the CometBFT sync response.
+
+`make bats-dind` is the higher-fidelity integration tier. It starts a
+privileged disposable Docker-in-Docker Host and runs the real inner
+`docker compose` lifecycle. GPU inference, chain state and external SSH remain
+small local fixtures, so this is safe to run without production credentials or
+hardware. Use it for lifecycle refactors; keep the fast Bats target for pure
+contracts.
+
+For a local refactor, `make bats-coverage` uses optional `kcov` to produce
+coverage under `coverage/bats/`. Keep coverage as a refactoring signal, not a
+release gate, until representative lifecycle tests are present.
+
 Choose the document for your role, each role has separate authority and keeps
 only the credentials it actually needs
 
